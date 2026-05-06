@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>OSPF 模拟器 (408考点加强版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+        .terminal-scroll::-webkit-scrollbar { width: 8px; }
+        .terminal-scroll::-webkit-scrollbar-track { background: #1a1a1a; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #333; }
+        .router-node { transition: all 0.3s ease; cursor: pointer; }
+        .router-node:hover .router-icon { box-shadow: 0 0 15px #60a5fa; border-color: #93c5fd; transform: scale(1.1); }
+        .packet { position: absolute; width: 8px; height: 8px; border-radius: 50%; pointer-events: none; z-index: 10; }
+        .packet.hello { background-color: #4ade80; box-shadow: 0 0 4px #4ade80; }
+        .packet.lsu { background-color: #facc15; box-shadow: 0 0 4px #facc15; }
+        .modal-bg { background-color: rgba(0, 0, 0, 0.7); backdrop-filter: blur(2px); }
+        .edu-tag { color: #c084fc; font-weight: bold; } /* Purple for Edu notes */
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col">
+
+<!-- Header -->
+<header class="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4 shrink-0">
+    <div>
+        <h1 class="text-lg font-bold text-blue-400">OSPF Simulator (Link State)</h1>
+        <div class="text-[10px] text-gray-400">408 考点: 链路状态 | Dijkstra | 泛洪 | 区域概念</div>
+    </div>
+    <div class="text-xs text-gray-400 flex gap-4">
+        <span>Routers: <span id="router-count" class="text-white">0</span></span>
+        <span>Topology Change: <span id="next-change-timer" class="text-yellow-400">--</span>s</span>
+        <button onclick="toggleEduPanel()" class="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs font-bold transition">
+            显示/隐藏 知识点卡片
+        </button>
+    </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden relative">
+    <!-- Knowledge Sidebar (Absolute) -->
+    <div id="edu-panel" class="absolute left-0 top-0 bottom-0 w-64 bg-gray-800/95 border-r border-gray-600 z-40 transform transition-transform duration-300 p-4 overflow-y-auto">
+        <h3 class="text-blue-400 font-bold border-b border-gray-600 pb-2 mb-3">OSPF 408 核心考点</h3>
+        <ul class="text-xs space-y-3 text-gray-300 list-disc pl-4">
+            <li>
+                <strong class="text-white">协议类型:</strong> 内部网关协议 (IGP)，基于<span class="text-yellow-400">链路状态 (Link State)</span>算法。
+            </li>
+            <li>
+                <strong class="text-white">最短路径优先:</strong> 每个路由器基于 LSDB 构建全网拓扑图，使用 <span class="text-yellow-400">Dijkstra 算法</span> 计算以自己为根的 SPF 树。
+            </li>
+            <li>
+                <strong class="text-white">度量值 (Metric):</strong> Cost (开销) = 参考带宽 / 接口带宽。不同于 RIP 的跳数。
+            </li>
+            <li>
+                <strong class="text-white">五种报文:</strong>
+                <ul class="list-decimal pl-4 mt-1 text-gray-400">
+                    <li>Hello: 发现/维持邻居</li>
+                    <li>DBD: 数据库描述</li>
+                    <li>LSR: 链路状态请求</li>
+                    <li>LSU: 链路状态更新 (本模拟器重点)</li>
+                    <li>LSAck: 确认</li>
+                </ul>
+            </li>
+            <li>
+                <strong class="text-white">泛洪 (Flooding):</strong> LSA 会传播给区域内所有路由器，确保 LSDB 同步。
+            </li>
+        </ul>
+        <div class="mt-4 p-2 bg-blue-900/30 rounded border border-blue-800 text-[10px] text-blue-200">
+            <p>观察指南：注意看黄色 LSU 小球如何瞬间"炸开"传遍全网，这是泛洪过程。</p>
+        </div>
+    </div>
+
+    <!-- Left: Terminal -->
+    <div class="w-1/3 min-w-[300px] bg-black border-r border-gray-700 flex flex-col pl-64 transition-all duration-300" id="terminal-container">
+        <div class="p-2 bg-gray-800 text-xs font-bold text-gray-300 border-b border-gray-700">
+            Protocol Events & Educational Logs
+        </div>
+        <div id="terminal" class="flex-1 p-3 overflow-y-auto terminal-scroll text-xs font-mono space-y-1">
+            <div class="text-green-500">System initialized.</div>
+        </div>
+    </div>
+
+    <!-- Right: Canvas -->
+    <div class="flex-1 relative bg-gray-900 overflow-hidden" id="canvas-container">
+        <svg id="links-layer" class="absolute inset-0 w-full h-full pointer-events-none"></svg>
+        <div id="nodes-layer" class="absolute inset-0 w-full h-full"></div>
+        <div id="packets-layer" class="absolute inset-0 w-full h-full pointer-events-none"></div>
+
+        <div class="absolute bottom-4 right-4 bg-gray-800/80 p-2 rounded text-xs text-gray-400 pointer-events-none text-right">
+            <div class="flex items-center justify-end gap-2 mb-1"><span class="w-2 h-2 rounded-full bg-green-400"></span> Hello (10s)</div>
+            <div class="flex items-center justify-end gap-2"><span class="w-2 h-2 rounded-full bg-yellow-400"></span> LSU (Triggered)</div>
+        </div>
+    </div>
+
+    <!-- Detail Modal -->
+    <div id="detail-modal" class="absolute inset-0 modal-bg flex items-center justify-center z-50 hidden">
+        <div class="bg-gray-800 border border-gray-600 rounded-lg shadow-2xl w-[600px] max-h-[80vh] flex flex-col text-sm">
+            <div class="p-3 border-b border-gray-600 flex justify-between bg-gray-700 rounded-t-lg">
+                <h3 class="font-bold text-white"><span id="modal-title">Router Details</span></h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <div class="flex-1 overflow-auto p-4 gap-4 flex flex-col">
+                <div class="bg-gray-900 p-2 rounded border border-gray-700">
+                    <div class="font-bold text-blue-400 mb-2 border-b border-gray-800">Routing Table (Dijkstra Result)</div>
+                    <table class="w-full text-left text-xs text-gray-300">
+                        <tbody id="modal-routing-table"></tbody>
+                    </table>
+                </div>
+                <div class="bg-gray-900 p-2 rounded border border-gray-700 flex-1">
+                    <div class="font-bold text-yellow-500 mb-2 border-b border-gray-800">Router Log</div>
+                    <div id="modal-logs" class="font-mono text-xs text-gray-400"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CONFIG = { HELLO_INTERVAL: 10000, DEAD_INTERVAL: 40000, MIN_ROUTERS: 3, MAX_ROUTERS: 8, MIN_CHANGE_TIME: 15, MAX_CHANGE_TIME: 40, PACKET_SPEED: 1.5 };
+    let routers = [], links = [], packets = [], routerIdCounter = 1, lastTime = 0, nextTopologyChangeTime = 0, selectedRouterId = null;
+
+    function toggleEduPanel() {
+        const panel = document.getElementById('edu-panel');
+        const term = document.getElementById('terminal-container');
+        panel.classList.toggle('-translate-x-full');
+        term.classList.toggle('pl-64');
+        term.classList.toggle('pl-0');
+    }
+
+    const log = (msg, type = 'info') => {
+        const term = document.getElementById('terminal');
+        const line = document.createElement('div');
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        let color = 'text-gray-400';
+        let prefix = '';
+
+        if (type === 'edu') { color = 'text-purple-400 font-bold'; prefix = '[408考点] '; }
+        else if (type === 'lsu') color = 'text-yellow-500';
+        else if (type === 'system') color = 'text-blue-400';
+        else if (type === 'error') color = 'text-red-500';
+
+        line.className = `${color} break-all mb-1 leading-tight`;
+        line.innerHTML = `<span class="opacity-40 text-[10px]">[${time}]</span> ${prefix}${msg}`;
+        term.appendChild(line);
+        term.scrollTop = term.scrollHeight;
+    };
+
+    class Packet {
+        constructor(type, srcId, dstId, payload) {
+            this.type = type; this.srcId = srcId; this.dstId = dstId; this.payload = payload;
+            const src = routers.find(r => r.id === srcId); const dst = routers.find(r => r.id === dstId);
+            if(!src || !dst) { this.arrived = true; return; }
+            this.x = src.x; this.y = src.y; this.tx = dst.x; this.ty = dst.y;
+            this.el = document.createElement('div');
+            this.el.className = `packet ${type.toLowerCase()}`;
+            document.getElementById('packets-layer').appendChild(this.el);
+        }
+        update() {
+            const dx = this.tx - this.x, dy = this.ty - this.y, dist = Math.sqrt(dx*dx+dy*dy);
+            if(dist < CONFIG.PACKET_SPEED*2) { this.arrived = true; this.el.remove(); return true; }
+            this.x += (dx/dist)*CONFIG.PACKET_SPEED; this.y += (dy/dist)*CONFIG.PACKET_SPEED;
+            this.el.style.transform = `translate(${this.x}px, ${this.y}px)`;
+            return false;
+        }
+    }
+
+    class Router {
+        constructor(id, x, y) {
+            this.id = id; this.x = x; this.y = y;
+            this.neighbors = {}; this.lsdb = {}; this.routingTable = {}; this.seq = 1; this.lastHello = 0; this.logs = [];
+            this.updateSelfLSA();
+        }
+
+        addLog(msg) { this.logs.unshift(msg); if(selectedRouterId===this.id) renderLogs(this); }
+
+        update(now) {
+            if(now - this.lastHello > CONFIG.HELLO_INTERVAL) {
+                this.sendHello(); this.lastHello = now;
+            }
+            for(const nid in this.neighbors) {
+                if(now - this.neighbors[nid].lastHello > CONFIG.DEAD_INTERVAL) {
+                    log(`${this.id} 判定邻居 ${nid} 失效 (Dead Timer超时)`, 'error');
+                    log(`OSPF 使用 Dead Timer (通常是Hello的4倍) 来快速检测故障。`, 'edu');
+                    delete this.neighbors[nid];
+                    this.updateSelfLSA();
+                }
+            }
+        }
+
+        sendHello() {
+            links.filter(l => l.a===this.id || l.b===this.id).map(l => l.a===this.id?l.b:l.a).forEach(tid => {
+                packets.push(new Packet('HELLO', this.id, tid, { seen: Object.keys(this.neighbors) }));
+            });
+        }
+
+        receivePacket(pkt) {
+            if(pkt.type === 'HELLO') {
+                const nid = pkt.srcId;
+                if(!this.neighbors[nid]) {
+                    this.neighbors[nid] = { state: 'Init', lastHello: Date.now(), cost: 1 };
+                    log(`${this.id} 收到 ${nid} 的 Hello。建立邻接关系。`, 'info');
+                } else {
+                    this.neighbors[nid].lastHello = Date.now();
+                }
+                if(pkt.payload.seen.includes(this.id) && this.neighbors[nid].state !== 'Full') {
+                    this.neighbors[nid].state = 'Full';
+                    log(`${this.id} 与 ${nid} 状态变为 Full。触发 LSA 生成。`, 'system');
+                    this.updateSelfLSA(); // 拓扑变了，生成新 LSA
+                }
+            } else if(pkt.type === 'LSU') {
+                const lsa = pkt.payload;
+                const old = this.lsdb[lsa.originId];
+                if(!old || lsa.seq > old.seq) {
+                    // 收到了更新的 LSA
+                    this.lsdb[lsa.originId] = lsa;
+
+                    // 教学点：SPF 计算触发
+                    this.addLog(`LSDB同步: 更新了 ${lsa.originId} 的 LSA (Seq ${lsa.seq})`);
+                    this.runSPF();
+
+                    // 教学点：泛洪
+                    this.floodLSU(lsa, pkt.srcId);
+                }
+            }
+        }
+
+        updateSelfLSA() {
+            const activeLinks = Object.keys(this.neighbors).filter(n => this.neighbors[n].state === 'Full').map(n => ({ id: n, cost: 1 }));
+            this.lsdb[this.id] = { originId: this.id, seq: this.seq++, links: activeLinks };
+            this.addLog(`生成 Router-LSA (Type 1), 包含 ${activeLinks.length} 个邻居`);
+            this.runSPF();
+            this.floodLSU();
+        }
+
+        floodLSU(lsa=null, exclude=null) {
+            const payload = lsa || this.lsdb[this.id];
+            // 教学点：LSU 泛洪
+            if(!lsa) log(`${this.id} 泛洪自己的 LSA (Type 1)。OSPF 必须保持全网 LSDB 同步。`, 'edu');
+
+            Object.keys(this.neighbors).forEach(nid => {
+                if(this.neighbors[nid].state === 'Full' && nid !== exclude) {
+                    packets.push(new Packet('LSU', this.id, nid, payload));
+                }
+            });
+        }
+
+        runSPF() {
+            // 简化的 Dijkstra
+            const nodes = new Set(Object.keys(this.lsdb));
+            const dist = {}, prev = {};
+            nodes.forEach(n => { dist[n] = Infinity; prev[n] = null; });
+            dist[this.id] = 0;
+            const Q = [this.id];
+
+            while(Q.length) {
+                Q.sort((a,b) => dist[a] - dist[b]);
+                const u = Q.shift();
+                const lsa = this.lsdb[u];
+                if(lsa && lsa.links) {
+                    lsa.links.forEach(link => {
+                        if(dist[u] + link.cost < dist[link.id]) {
+                            dist[link.id] = dist[u] + link.cost;
+                            prev[link.id] = u;
+                            if(!Q.includes(link.id)) Q.push(link.id);
+                        }
+                    });
+                }
+            }
+
+            // 路由表生成
+            this.routingTable = {};
+            nodes.forEach(dst => {
+                if(dst !== this.id && dist[dst] !== Infinity) {
+                    let curr = dst;
+                    while(prev[curr] && prev[curr] !== this.id) curr = prev[curr];
+                    this.routingTable[dst] = { nextHop: curr, cost: dist[dst] };
+                }
+            });
+            renderUI(this.id);
+        }
+    }
+
+    // --- System Loop ---
+    function init() {
+        log('OSPF 进程启动。等待路由器加入...', 'system');
+        addRouter(); addRouter(); addRouter();
+        connect(routers[0], routers[1]); connect(routers[1], routers[2]); connect(routers[2], routers[0]);
+        setTimer(); requestAnimationFrame(loop);
+    }
+
+    function setTimer() {
+        const t = Math.floor(Math.random()*(CONFIG.MAX_CHANGE_TIME-CONFIG.MIN_CHANGE_TIME)+CONFIG.MIN_CHANGE_TIME);
+        nextTopologyChangeTime = Date.now() + t*1000;
+        log(`[模拟器] 下次拓扑变更是 ${t} 秒后。`, 'info');
+    }
+
+    function loop() {
+        const now = Date.now();
+        if(now > nextTopologyChangeTime) {
+            if(routers.length < CONFIG.MAX_ROUTERS && Math.random() > 0.3) addRouter();
+            else if(routers.length > CONFIG.MIN_ROUTERS) removeRouter();
+            setTimer();
+        }
+        routers.forEach(r => r.update(now));
+        for(let i=packets.length-1; i>=0; i--) {
+            if(packets[i].update()) {
+                const dst = routers.find(r => r.id === packets[i].dstId);
+                if(dst) dst.receivePacket(packets[i]);
+                packets.splice(i, 1);
+            }
+        }
+        document.getElementById('router-count').innerText = routers.length;
+        document.getElementById('next-change-timer').innerText = Math.max(0, Math.ceil((nextTopologyChangeTime-now)/1000));
+        requestAnimationFrame(loop);
+    }
+
+    function addRouter() {
+        const id = `R${routerIdCounter++}`;
+        const r = new Router(id, Math.random()*600+100, Math.random()*400+50);
+        routers.push(r);
+        createNode(r);
+        log(`${id} 加入网络。`, 'system');
+        log(`[触发更新] 新节点加入 -> 触发 Hello 发现邻居 -> 随后将触发 LSA 泛洪。`, 'edu');
+        if(routers.length > 1) {
+            const target = routers.filter(x => x!==r).sort((a,b) => dist(r,a)-dist(r,b))[0];
+            connect(r, target);
+        }
+    }
+
+    function removeRouter() {
+        const idx = Math.floor(Math.random()*routers.length);
+        const r = routers[idx];
+        log(`${r.id} 故障下线。`, 'error');
+        log(`[触发更新] 物理链路断开。邻居将通过 Dead Timer 检测到故障并重新计算 SPF。`, 'edu');
+        document.getElementById(`node-${r.id}`).remove();
+        links = links.filter(l => l.a!==r.id && l.b!==r.id);
+        routers.splice(idx, 1);
+        if(selectedRouterId === r.id) closeModal();
+    }
+
+    function connect(r1, r2) { links.push({a:r1.id, b:r2.id}); drawLinks(); }
+
+    // --- UI Utils ---
+    function createNode(r) {
+        const el = document.createElement('div');
+        el.id = `node-${r.id}`; el.className = 'absolute flex flex-col items-center router-node z-20';
+        el.style.transform = 'translate(-50%, -50%)'; el.style.left = r.x+'px'; el.style.top = r.y+'px';
+        el.onclick = () => openModal(r.id);
+        el.innerHTML = `<div class="router-icon w-10 h-10 rounded-full bg-blue-600 border-2 border-blue-300 flex items-center justify-center text-white font-bold shadow-lg text-xs">${r.id}</div>
+                            <div id="rt-${r.id}" class="mt-1 bg-gray-800/90 text-[9px] text-gray-300 p-1 rounded border border-gray-600 min-w-[60px] text-center">Wait</div>`;
+        document.getElementById('nodes-layer').appendChild(el);
+    }
+    function drawLinks() {
+        const svg = document.getElementById('links-layer'); svg.innerHTML = '';
+        links.forEach(l => {
+            const r1 = routers.find(x => x.id===l.a), r2 = routers.find(x => x.id===l.b);
+            if(r1&&r2) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg','line');
+                line.setAttribute('x1', r1.x); line.setAttribute('y1', r1.y); line.setAttribute('x2', r2.x); line.setAttribute('y2', r2.y);
+                line.setAttribute('stroke','#4b5563'); line.setAttribute('stroke-width','2'); svg.appendChild(line);
+            }
+        });
+    }
+    function renderUI(id) {
+        const el = document.getElementById(`rt-${id}`);
+        if(el) { const r = routers.find(x => x.id===id); el.innerText = `${Object.keys(r.routingTable).length} Routes`; }
+        if(selectedRouterId === id) openModal(id);
+    }
+    function openModal(id) {
+        selectedRouterId = id; const r = routers.find(x => x.id===id);
+        document.getElementById('detail-modal').classList.remove('hidden');
+        document.getElementById('modal-title').innerText = `${id} 详情`;
+        const tb = document.getElementById('modal-routing-table'); tb.innerHTML = '';
+        for(const d in r.routingTable) {
+            tb.innerHTML += `<tr class="border-b border-gray-800"><td class="py-1 text-green-400">${d}</td><td>${r.routingTable[d].nextHop}</td><td>${r.routingTable[d].cost}</td></tr>`;
+        }
+        renderLogs(r);
+    }
+    function renderLogs(r) { document.getElementById('modal-logs').innerHTML = r.logs.join('<br>'); }
+    function closeModal() { selectedRouterId = null; document.getElementById('detail-modal').classList.add('hidden'); }
+    const dist = (a,b) => Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2);
+
+    init();
+</script>
+</body>
+</html>

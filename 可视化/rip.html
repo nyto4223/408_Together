@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>RIP 模拟器 (408考点加强版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+        .terminal-scroll::-webkit-scrollbar { width: 8px; }
+        .terminal-scroll::-webkit-scrollbar-track { background: #1a1a1a; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #333; }
+        .router-node { transition: all 0.3s ease; cursor: pointer; }
+        .router-node:hover .router-icon { box-shadow: 0 0 15px #f87171; border-color: #fca5a5; transform: scale(1.1); }
+        .router-node.selected .router-icon { box-shadow: 0 0 0 4px #fca5a5, 0 0 20px #f87171; border-color: white; transform: scale(1.1); z-index: 50; }
+        .packet { position: absolute; width: 10px; height: 10px; border-radius: 2px; pointer-events: none; z-index: 10; }
+        .packet.update { background-color: #3b82f6; box-shadow: 0 0 4px #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col">
+
+<header class="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4 shrink-0">
+    <div>
+        <h1 class="text-lg font-bold text-red-400">RIP Simulator (Distance Vector)</h1>
+        <div class="text-[10px] text-gray-400">408 考点: 距离矢量 | 跳数限制 | 坏消息传得慢 | 水平分割</div>
+    </div>
+    <div class="text-xs text-gray-400 flex gap-4">
+        <span>Routers: <span id="router-count">0</span></span>
+        <span>Next Change: <span id="next-change-timer" class="text-yellow-400">--</span>s</span>
+        <button onclick="toggleEduPanel()" class="bg-red-600 hover:bg-red-500 text-white px-3 py-1 rounded text-xs font-bold transition">
+            知识点卡片
+        </button>
+    </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden relative">
+    <!-- Edu Panel (Hidden by default) -->
+    <div id="edu-panel" class="absolute left-0 top-0 bottom-0 w-64 bg-gray-800/95 border-r border-gray-600 z-50 transform -translate-x-full transition-transform duration-300 p-4 overflow-y-auto shadow-2xl">
+        <h3 class="text-red-400 font-bold border-b border-gray-600 pb-2 mb-3">RIP 408 核心考点</h3>
+        <ul class="text-xs space-y-3 text-gray-300 list-disc pl-4">
+            <li><strong class="text-white">协议类型:</strong> 内部网关协议 (IGP)，基于<span class="text-yellow-400">距离矢量</span>。</li>
+            <li><strong class="text-white">算法基础:</strong> Bellman-Ford。仅和相邻路由器交换信息。</li>
+            <li><strong class="text-white">度量值:</strong> 跳数 (Hop Count)。<br><span class="text-gray-500">Max 15, 16=不可达。</span></li>
+            <li><strong class="text-white">防环机制:</strong> 水平分割、毒性逆转、触发更新。</li>
+            <li><strong class="text-white">更新机制:</strong> 周期性广播整表 (本模拟器加速为5s)。</li>
+        </ul>
+    </div>
+
+    <!-- Left Column: Global Terminal -->
+    <div class="w-1/5 min-w-[220px] bg-black border-r border-gray-700 flex flex-col transition-all duration-300 z-10" id="terminal-container">
+        <div class="p-2 bg-gray-800 text-xs font-bold text-gray-300 border-b border-gray-700">
+            Global Events & 408 Notes
+        </div>
+        <div id="terminal" class="flex-1 p-3 overflow-y-auto terminal-scroll text-xs font-mono space-y-1">
+            <div class="text-green-500">RIP Daemon started.</div>
+        </div>
+    </div>
+
+    <!-- Center Column: Canvas -->
+    <div class="flex-1 relative bg-gray-900 overflow-hidden" id="canvas-container">
+        <svg id="links-layer" class="absolute inset-0 w-full h-full pointer-events-none"></svg>
+        <div id="nodes-layer" class="absolute inset-0 w-full h-full"></div>
+        <div id="packets-layer" class="absolute inset-0 w-full h-full pointer-events-none"></div>
+
+        <div class="absolute bottom-4 left-4 bg-gray-800/80 p-2 rounded text-xs text-gray-400 pointer-events-none">
+            <span class="w-2 h-2 rounded-sm bg-blue-500 inline-block mr-1"></span> 周期性更新包 (Periodic Update)
+        </div>
+        <div class="absolute top-4 left-4 text-xs text-gray-500 pointer-events-none select-none">
+            Tips: 点击路由器在右侧查看详情
+        </div>
+    </div>
+
+    <!-- Right Column: Routing Table & Details (Explicit Display) -->
+    <div class="w-1/4 min-w-[300px] bg-gray-800 border-l border-gray-700 flex flex-col z-10 shadow-xl">
+        <!-- Header -->
+        <div class="p-2 bg-gray-700 border-b border-gray-600 flex justify-between items-center h-10 shrink-0">
+            <span class="font-bold text-sm text-white">Selected Router: <span id="panel-router-id" class="text-red-400">None</span></span>
+        </div>
+
+        <!-- Routing Table Section -->
+        <div class="flex-1 flex flex-col overflow-hidden border-b border-gray-600 bg-gray-900">
+            <div class="px-3 py-2 bg-gray-800 text-xs font-bold text-red-300 border-b border-gray-700 flex justify-between">
+                <span>RIP Routing Table</span>
+                <span class="text-[10px] text-gray-500 font-normal">Auto-refresh</span>
+            </div>
+            <div class="flex-1 overflow-auto p-0">
+                <table class="w-full text-left text-xs text-gray-300">
+                    <thead class="bg-gray-800 sticky top-0 text-gray-500 font-medium">
+                    <tr>
+                        <th class="px-3 py-2">Dest</th>
+                        <th class="px-3 py-2">Next Hop</th>
+                        <th class="px-3 py-2">Metric</th>
+                    </tr>
+                    </thead>
+                    <tbody id="panel-routing-table" class="divide-y divide-gray-800">
+                    <tr><td colspan="3" class="px-3 py-4 text-center text-gray-500 italic">Select a router to view table</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Router Specific Logs Section -->
+        <div class="h-1/3 min-h-[150px] flex flex-col bg-black">
+            <div class="px-3 py-1 bg-gray-800 text-[10px] font-bold text-yellow-500 border-b border-gray-700 uppercase">
+                Local Log (Route Changes)
+            </div>
+            <div id="panel-logs" class="flex-1 overflow-y-auto p-2 font-mono text-[10px] text-gray-400 space-y-1 terminal-scroll">
+                <div class="text-gray-600">No router selected.</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CONFIG = { UPDATE_INTERVAL: 5000, INVALID_TIMER: 15000, INFINITY: 16, PACKET_SPEED: 2.0 };
+    let routers = [], links = [], packets = [], routerIdCounter = 1, lastTime = 0, nextTopologyChangeTime = 0, selectedRouterId = null;
+
+    function toggleEduPanel() {
+        const panel = document.getElementById('edu-panel');
+        panel.classList.toggle('-translate-x-full');
+    }
+
+    const log = (msg, type = 'info') => {
+        const term = document.getElementById('terminal');
+        const line = document.createElement('div');
+        const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+        let color = 'text-gray-400';
+        if (type === 'edu') { color = 'text-purple-400 font-bold'; msg = `[408考点] ${msg}`; }
+        else if (type === 'update') color = 'text-blue-400';
+        else if (type === 'route-change') color = 'text-yellow-400';
+        else if (type === 'error') color = 'text-red-500';
+        line.className = `${color} break-all mb-1 leading-tight`;
+        line.innerHTML = `<span class="opacity-40 text-[10px]">[${time}]</span> ${msg}`;
+        term.appendChild(line);
+        term.scrollTop = term.scrollHeight;
+    };
+
+    class Packet {
+        constructor(srcId, dstId, table) {
+            this.srcId = srcId; this.dstId = dstId; this.table = table;
+            const src = routers.find(r => r.id === srcId); const dst = routers.find(r => r.id === dstId);
+            if(!src || !dst) { this.arrived = true; return; }
+            this.x = src.x; this.y = src.y; this.tx = dst.x; this.ty = dst.y;
+            this.el = document.createElement('div'); this.el.className = 'packet update';
+            document.getElementById('packets-layer').appendChild(this.el);
+        }
+        update() {
+            const dx = this.tx - this.x, dy = this.ty - this.y, dist = Math.sqrt(dx*dx+dy*dy);
+            if(dist < CONFIG.PACKET_SPEED*2) { this.arrived = true; this.el.remove(); return true; }
+            this.x += (dx/dist)*CONFIG.PACKET_SPEED; this.y += (dy/dist)*CONFIG.PACKET_SPEED;
+            this.el.style.transform = `translate(${this.x}px, ${this.y}px)`;
+            return false;
+        }
+    }
+
+    class Router {
+        constructor(id, x, y) {
+            this.id = id; this.x = x; this.y = y; this.table = {}; this.lastUpdate = 0; this.logs = [];
+            this.table[this.id] = { nextHop: 'Self', metric: 0, timer: Date.now() };
+        }
+
+        addLocalLog(msg) {
+            const time = new Date().toLocaleTimeString('en-US', { hour12: false, hour:'2-digit', minute:'2-digit', second:'2-digit' });
+            this.logs.unshift(`<span class="opacity-50">[${time}]</span> ${msg}`);
+            if(this.logs.length > 50) this.logs.pop();
+            if(selectedRouterId === this.id) updateRightPanelLogs(this);
+        }
+
+        update(now) {
+            if (now - this.lastUpdate > CONFIG.UPDATE_INTERVAL) {
+                this.sendUpdate();
+                this.lastUpdate = now;
+            }
+            // Check Timeouts
+            for (const dest in this.table) {
+                if (dest === this.id) continue;
+                const r = this.table[dest];
+                if (r.metric < CONFIG.INFINITY && now - r.timer > CONFIG.INVALID_TIMER) {
+                    log(`${this.id}: Route to ${dest} 超时失效 (Invalid Timer)。Metric -> 16。`, 'error');
+                    this.addLocalLog(`Route to ${dest} expired. Metric set to 16.`);
+                    r.metric = CONFIG.INFINITY; r.timer = now;
+                    this.sendUpdate(); // Triggered Update
+                }
+            }
+        }
+
+        sendUpdate() {
+            links.filter(l => l.a===this.id || l.b===this.id).map(l => l.a===this.id?l.b:l.a).forEach(nid => {
+                const payload = {};
+                for(const dest in this.table) {
+                    const r = this.table[dest];
+                    // Split Horizon: Don't send back to nextHop
+                    if(r.nextHop === nid) payload[dest] = CONFIG.INFINITY; // Poison Reverse
+                    else payload[dest] = r.metric;
+                }
+                packets.push(new Packet(this.id, nid, payload));
+            });
+        }
+
+        receivePacket(pkt) {
+            const neighbor = pkt.srcId;
+            const newTable = pkt.table;
+            let changed = false;
+
+            for(const dest in newTable) {
+                const newMetric = Math.min(newTable[dest] + 1, CONFIG.INFINITY);
+                const current = this.table[dest];
+
+                if(!current) {
+                    if(newMetric < CONFIG.INFINITY) {
+                        this.table[dest] = { nextHop: neighbor, metric: newMetric, timer: Date.now() };
+                        log(`${this.id} 学习到新路由 -> ${dest} (跳数: ${newMetric})`, 'route-change');
+                        this.addLocalLog(`Learned ${dest} via ${neighbor} (Hops: ${newMetric})`);
+                        changed = true;
+                    }
+                } else {
+                    // Bellman-Ford
+                    if(newMetric < current.metric) {
+                        current.nextHop = neighbor; current.metric = newMetric; current.timer = Date.now();
+                        log(`${this.id} 发现更优路径 -> ${dest} via ${neighbor} (跳数: ${newMetric})`, 'route-change');
+                        this.addLocalLog(`Better path to ${dest} via ${neighbor} (Hops: ${newMetric})`);
+                        changed = true;
+                    } else if (current.nextHop === neighbor) {
+                        if(current.metric !== newMetric) {
+                            log(`${this.id} 更新路由 -> ${dest} 跳数变更为 ${newMetric}`, 'update');
+                            this.addLocalLog(`Route ${dest} metric changed to ${newMetric}`);
+                            if(newMetric === CONFIG.INFINITY) log(`[坏消息] ${dest} 不可达。`, 'edu');
+                            current.metric = newMetric; changed = true;
+                        }
+                        current.timer = Date.now();
+                    }
+                }
+            }
+            if(changed) {
+                this.sendUpdate();
+                if(selectedRouterId === this.id) updateRightPanelTable(this);
+            }
+        }
+
+        linkDown(nid) {
+            let c = false;
+            for(const dest in this.table) {
+                if(this.table[dest].nextHop === nid) {
+                    this.table[dest].metric = CONFIG.INFINITY;
+                    this.addLocalLog(`Link ${nid} down. Poisoned route to ${dest}.`);
+                    c = true;
+                }
+            }
+            if(c) {
+                log(`${this.id} 触发更新: 广播链路故障`, 'edu');
+                this.sendUpdate();
+                if(selectedRouterId === this.id) updateRightPanelTable(this);
+            }
+        }
+    }
+
+    // --- UI Control ---
+    function selectRouter(id) {
+        // Deselect old
+        if(selectedRouterId) {
+            const oldEl = document.getElementById(`node-${selectedRouterId}`);
+            if(oldEl) oldEl.classList.remove('selected');
+        }
+
+        selectedRouterId = id;
+
+        // Select new
+        const newEl = document.getElementById(`node-${id}`);
+        if(newEl) newEl.classList.add('selected');
+
+        const router = routers.find(r => r.id === id);
+        if(router) {
+            document.getElementById('panel-router-id').innerText = id;
+            updateRightPanelTable(router);
+            updateRightPanelLogs(router);
+        }
+    }
+
+    function updateRightPanelTable(router) {
+        const tbody = document.getElementById('panel-routing-table');
+        tbody.innerHTML = '';
+
+        // Sort keys
+        Object.keys(router.table).sort().forEach(dest => {
+            const r = router.table[dest];
+            const tr = document.createElement('tr');
+            const isBad = r.metric >= CONFIG.INFINITY;
+            tr.className = isBad ? 'text-red-500 font-bold bg-red-900/10' : 'hover:bg-gray-800';
+
+            tr.innerHTML = `
+                    <td class="px-3 py-1 border-b border-gray-800">${dest}</td>
+                    <td class="px-3 py-1 border-b border-gray-800">${r.nextHop}</td>
+                    <td class="px-3 py-1 border-b border-gray-800">${isBad ? '16 (Unreachable)' : r.metric}</td>
+                `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function updateRightPanelLogs(router) {
+        const container = document.getElementById('panel-logs');
+        container.innerHTML = router.logs.join('');
+    }
+
+    // --- System Loop ---
+    function init() {
+        log('系统启动。RIP 周期更新设置为 5s (加速模拟)。', 'system');
+        const r1 = addRouter();
+        const r2 = addRouter();
+        addRouter();
+        connect(routers[0], routers[1]); connect(routers[1], routers[2]);
+
+        // Auto-select first router
+        if(r1) selectRouter(r1.id);
+
+        setTimer(); requestAnimationFrame(loop);
+    }
+
+    function setTimer() {
+        const t = Math.floor(Math.random()*25 + 15);
+        nextTopologyChangeTime = Date.now() + t*1000;
+    }
+
+    function loop() {
+        const now = Date.now();
+        if(now > nextTopologyChangeTime) {
+            if(routers.length < 8 && Math.random() > 0.4) addRouter();
+            else if(routers.length > 2) removeRouter();
+            setTimer();
+        }
+        routers.forEach(r => r.update(now));
+        for(let i=packets.length-1; i>=0; i--) {
+            if(packets[i].update()) {
+                const dst = routers.find(r => r.id === packets[i].dstId);
+                if(dst) dst.receivePacket(packets[i]);
+                packets.splice(i, 1);
+            }
+        }
+        document.getElementById('router-count').innerText = routers.length;
+        document.getElementById('next-change-timer').innerText = Math.max(0, Math.ceil((nextTopologyChangeTime-now)/1000));
+        requestAnimationFrame(loop);
+    }
+
+    function addRouter() {
+        const id = `R${routerIdCounter++}`;
+        const r = new Router(id, Math.random()*600+50, Math.random()*400+50);
+        routers.push(r); createNode(r);
+        if(routers.length > 1) {
+            const target = routers.filter(x => x!==r).sort((a,b) => dist(r,a)-dist(r,b))[0];
+            connect(r, target);
+        }
+        return r;
+    }
+    function removeRouter() {
+        const idx = Math.floor(Math.random()*routers.length);
+        const r = routers[idx];
+
+        // If removed router was selected, clear panel
+        if(selectedRouterId === r.id) {
+            document.getElementById('panel-router-id').innerText = "None (Removed)";
+            document.getElementById('panel-routing-table').innerHTML = '<tr><td colspan="3" class="px-3 py-4 text-center text-red-500">Router Removed</td></tr>';
+            document.getElementById('panel-logs').innerHTML = '';
+            selectedRouterId = null;
+        }
+
+        document.getElementById(`node-${r.id}`).remove();
+        links.filter(l => l.a===r.id || l.b===r.id).forEach(l => {
+            const nid = l.a===r.id?l.b:l.a;
+            const n = routers.find(x => x.id===nid);
+            if(n) n.linkDown(r.id);
+        });
+        links = links.filter(l => l.a!==r.id && l.b!==r.id);
+        routers.splice(idx, 1);
+    }
+    function connect(r1, r2) { links.push({a:r1.id, b:r2.id}); drawLinks(); r1.sendUpdate(); r2.sendUpdate(); }
+
+    function createNode(r) {
+        const el = document.createElement('div'); el.id=`node-${r.id}`; el.className='absolute flex flex-col items-center router-node z-20';
+        el.style.left=r.x+'px'; el.style.top=r.y+'px'; el.style.transform='translate(-50%,-50%)';
+        el.onclick=(e)=>{ e.stopPropagation(); selectRouter(r.id); };
+        el.innerHTML=`<div class="router-icon w-10 h-10 rounded-full bg-red-600 border-2 border-red-300 flex items-center justify-center text-white font-bold shadow-lg">${r.id}</div>
+                          <div id="rt-${r.id}" class="mt-1 bg-gray-800/90 text-[9px] text-gray-300 p-1 rounded border border-gray-600 min-w-[60px] text-center">Wait</div>`;
+        document.getElementById('nodes-layer').appendChild(el);
+    }
+    function drawLinks() {
+        const svg=document.getElementById('links-layer'); svg.innerHTML='';
+        links.forEach(l=>{
+            const r1=routers.find(x=>x.id===l.a), r2=routers.find(x=>x.id===l.b);
+            if(r1&&r2){ const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+                line.setAttribute('x1',r1.x);line.setAttribute('y1',r1.y);line.setAttribute('x2',r2.x);line.setAttribute('y2',r2.y);
+                line.setAttribute('stroke','#4b5563');line.setAttribute('stroke-width',2);svg.appendChild(line);}
+        });
+    }
+    function renderUI(id) {
+        const el = document.getElementById(`rt-${id}`);
+        if(el) { const r = routers.find(x => x.id===id); el.innerText = `${Object.keys(r.table).filter(k=>r.table[k].metric<16).length} Routes`; }
+    }
+
+    // Click bg to deselect? Maybe better to keep selected.
+    const dist=(a,b)=>Math.sqrt((a.x-b.x)**2+(a.y-b.y)**2);
+    init();
+</script>
+</body>
+</html>

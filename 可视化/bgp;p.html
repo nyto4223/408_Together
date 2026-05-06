@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BGP 模拟器 (408考点加强版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Courier New', Courier, monospace; overflow: hidden; }
+        .router-node { transition: all 0.3s ease; cursor: pointer; }
+        .router-node:hover .router-icon { box-shadow: 0 0 15px #a78bfa; border-color: #c4b5fd; transform: scale(1.1); }
+        .packet { position: absolute; width: 12px; height: 12px; border-radius: 50%; pointer-events: none; z-index: 10; }
+        .packet.update { background-color: #fbbf24; box-shadow: 0 0 6px #fbbf24; border: 2px solid white; }
+        .packet.keepalive { width: 6px; height: 6px; background-color: #34d399; opacity: 0.6; }
+        .as-badge { font-size: 0.7rem; padding: 1px 4px; border-radius: 4px; background: #4c1d95; color: #e9d5ff; border: 1px solid #6d28d9; }
+    </style>
+</head>
+<body class="bg-gray-950 text-gray-100 h-screen flex flex-col">
+
+<header class="h-14 bg-gray-900 border-b border-gray-800 flex items-center justify-between px-4 shrink-0">
+    <div>
+        <h1 class="text-lg font-bold text-purple-400">BGP Simulator (Path Vector)</h1>
+        <div class="text-[10px] text-gray-400">408 考点: 外部网关协议(EGP) | AS-PATH 防环 | TCP连接 | 增量更新</div>
+    </div>
+    <div class="text-xs text-gray-400 flex gap-4">
+        <span>AS Nodes: <span id="as-count">0</span></span>
+        <button onclick="toggleEduPanel()" class="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1 rounded text-xs font-bold transition">
+            知识点卡片
+        </button>
+    </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden relative">
+    <!-- Edu Panel -->
+    <div id="edu-panel" class="absolute left-0 top-0 bottom-0 w-64 bg-gray-900/95 border-r border-gray-700 z-40 transform transition-transform duration-300 p-4 overflow-y-auto">
+        <h3 class="text-purple-400 font-bold border-b border-gray-700 pb-2 mb-3">BGP 408 核心考点</h3>
+        <ul class="text-xs space-y-3 text-gray-300 list-disc pl-4">
+            <li>
+                <strong class="text-white">协议定位:</strong> 外部网关协议 (EGP)，用于不同<span class="text-yellow-400">自治系统 (AS)</span> 之间的路由选择。
+            </li>
+            <li>
+                <strong class="text-white">传输层协议:</strong> 使用 <span class="text-yellow-400">TCP</span>，端口号 <span class="text-yellow-400">179</span>。这保证了可靠性。
+            </li>
+            <li>
+                <strong class="text-white">路由算法:</strong> <span class="text-yellow-400">路径矢量 (Path Vector)</span>。
+                <br><span class="text-gray-500 text-[10px]">它记录路径上经过的所有 AS 序列。</span>
+            </li>
+            <li>
+                <strong class="text-white">防环机制:</strong>
+                <p class="text-gray-400 mt-1">路由器收到 UPDATE 报文时，如果发现 <span class="text-yellow-400">AS-PATH</span> 属性中包含自己的 AS 号，直接丢弃。</p>
+            </li>
+            <li>
+                <strong class="text-white">更新机制:</strong>
+                <ul class="list-decimal pl-4 mt-1 text-gray-400">
+                    <li>仅在建立连接时发送全量路由表。</li>
+                    <li>之后只发送<span class="text-yellow-400">增量更新 (Incremental Updates)</span>。</li>
+                    <li>使用 Keepalive 维持邻居 (保活)。</li>
+                </ul>
+            </li>
+        </ul>
+    </div>
+
+    <!-- Terminal -->
+    <div class="w-1/3 min-w-[350px] bg-black border-r border-gray-800 flex flex-col pl-64 transition-all duration-300" id="terminal-container">
+        <div class="p-2 bg-gray-900 text-xs font-bold text-purple-300 border-b border-gray-800">
+            BGP Session Logs & Edu Notes
+        </div>
+        <div id="terminal" class="flex-1 p-3 overflow-y-auto text-xs font-mono space-y-1 text-gray-400">
+            <div class="text-purple-500">BGP-4 Speaker initialized.</div>
+        </div>
+    </div>
+
+    <!-- Canvas -->
+    <div class="flex-1 relative bg-gray-950" id="canvas-container">
+        <svg id="links-layer" class="absolute inset-0 w-full h-full pointer-events-none"></svg>
+        <div id="nodes-layer" class="absolute inset-0 w-full h-full"></div>
+        <div id="packets-layer" class="absolute inset-0 w-full h-full pointer-events-none"></div>
+        <div class="absolute bottom-4 right-4 bg-gray-900/80 p-2 rounded text-xs text-gray-500 pointer-events-none text-right">
+            <div><span class="w-2 h-2 rounded-full bg-yellow-400 inline-block mr-1"></span> UPDATE (Triggered)</div>
+            <div><span class="w-2 h-2 rounded-full bg-green-400 inline-block mr-1 opacity-60"></span> KEEPALIVE</div>
+        </div>
+    </div>
+
+    <!-- Modal -->
+    <div id="modal" class="absolute inset-0 bg-black/80 flex items-center justify-center hidden z-50 backdrop-blur-sm">
+        <div class="bg-gray-900 border border-gray-700 w-[700px] h-[500px] rounded-lg shadow-2xl flex flex-col">
+            <div class="p-3 bg-gray-800 border-b border-gray-700 flex justify-between">
+                <h3 class="font-bold text-purple-400" id="modal-title">AS Details</h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-white">✕</button>
+            </div>
+            <div class="p-4 overflow-y-auto flex-1 font-mono text-xs">
+                <div class="mb-4">
+                    <h4 class="text-yellow-500 font-bold mb-2">BGP RIB (Routing Information Base)</h4>
+                    <table class="w-full text-left bg-gray-950 border border-gray-800 bgp-rib-table">
+                        <thead><tr class="text-gray-500 border-b border-gray-800"><th>Prefix</th><th>Next Hop</th><th>AS_PATH</th><th>Status</th></tr></thead>
+                        <tbody id="rib-body" class="text-gray-300"></tbody>
+                    </table>
+                </div>
+                <div>
+                    <h4 class="text-blue-500 font-bold mb-2">Neighbor State</h4>
+                    <div id="neighbor-state" class="text-gray-400"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const CONFIG = { KEEPALIVE_INTERVAL: 8000, PACKET_SPEED: 1.5 };
+    let ases = [], links = [], packets = [], asCounter = 100, selectedAsId = null;
+
+    function toggleEduPanel() {
+        const panel = document.getElementById('edu-panel');
+        const term = document.getElementById('terminal-container');
+        panel.classList.toggle('-translate-x-full');
+        term.classList.toggle('pl-64');
+        term.classList.toggle('pl-0');
+    }
+
+    const log = (msg, color='text-gray-400') => {
+        const term = document.getElementById('terminal');
+        const div = document.createElement('div');
+        // Edu override
+        if (color === 'edu') { color = 'text-purple-400 font-bold'; msg = `[408考点] ${msg}`; }
+
+        div.className = `${color} border-b border-gray-900/50 pb-0.5 leading-tight mb-1`;
+        div.innerHTML = `<span class="opacity-40 select-none text-[10px]">[${new Date().toISOString().substr(11,8)}]</span> ${msg}`;
+        term.appendChild(div);
+        term.scrollTop = term.scrollHeight;
+    };
+
+    class Packet {
+        constructor(type, srcAs, dstAs, data) {
+            this.type = type; this.srcAs = srcAs; this.dstAs = dstAs; this.data = data;
+            const s = ases.find(a => a.id === srcAs); const d = ases.find(a => a.id === dstAs);
+            this.x = s.x; this.y = s.y; this.tx = d.x; this.ty = d.y;
+            this.el = document.createElement('div'); this.el.className = `packet ${type.toLowerCase()}`;
+            document.getElementById('packets-layer').appendChild(this.el);
+        }
+        update() {
+            const dx = this.tx - this.x, dy = this.ty - this.y, d = Math.sqrt(dx*dx+dy*dy);
+            if(d < CONFIG.PACKET_SPEED*2) { this.done = true; this.el.remove(); return true; }
+            this.x += (dx/d)*CONFIG.PACKET_SPEED; this.y += (dy/d)*CONFIG.PACKET_SPEED;
+            this.el.style.transform = `translate(${this.x}px, ${this.y}px)`;
+            return false;
+        }
+    }
+
+    class ASNode {
+        constructor(id, x, y) {
+            this.id = id; this.x = x; this.y = y; this.rib = {}; this.neighbors = {}; this.lastKeepalive = 0;
+            const prefix = `192.${(id-100)}.0.0/16`;
+            this.rib[prefix] = { path: [id], nextHopAs: 'Self', best: true, origin: true };
+        }
+
+        update(now) {
+            if(now - this.lastKeepalive > CONFIG.KEEPALIVE_INTERVAL) {
+                Object.keys(this.neighbors).forEach(nid => {
+                    packets.push(new Packet('KEEPALIVE', this.id, parseInt(nid), null));
+                });
+                this.lastKeepalive = now;
+            }
+        }
+
+        addNeighbor(peerId) {
+            this.neighbors[peerId] = { state: 'Established', lastKeepalive: Date.now() };
+            log(`AS${this.id} 建立 eBGP 连接 -> AS${peerId}`, 'text-blue-300');
+            if(Object.keys(this.neighbors).length === 1) {
+                log(`BGP 基于 TCP (端口179)。建立连接后交换完整路由表。`, 'edu');
+            }
+            this.sendUpdate(peerId);
+        }
+
+        sendUpdate(peerId) {
+            const updates = {};
+            for(const pfx in this.rib) {
+                const route = this.rib[pfx];
+                if(route.best && !route.path.includes(peerId)) {
+                    updates[pfx] = route.path;
+                }
+            }
+            if(Object.keys(updates).length > 0) {
+                packets.push(new Packet('UPDATE', this.id, peerId, updates));
+            }
+        }
+
+        receivePacket(pkt) {
+            if(pkt.type === 'UPDATE') {
+                let ribChanged = false;
+                const peerId = pkt.srcAs;
+                const routes = pkt.data;
+
+                for(const pfx in routes) {
+                    const receivedPath = routes[pfx];
+                    // AS-PATH Loop Prevention
+                    if(receivedPath.includes(this.id)) {
+                        // Log explicitly for edu
+                        log(`AS${this.id} 丢弃来自 AS${peerId} 的路由 (${pfx})。原因: AS-PATH 包含自身 ID (防环)。`, 'edu');
+                        continue;
+                    }
+
+                    const newPath = [peerId, ...receivedPath];
+                    const currentBest = this.rib[pfx];
+
+                    if (!currentBest) {
+                        this.rib[pfx] = { path: newPath, nextHopAs: peerId, best: true };
+                        ribChanged = true;
+                        log(`AS${this.id} 学习新路由 ${pfx} (Path: ${newPath.join(' ')})`, 'text-green-400');
+                    } else {
+                        // Path Vector: Shorter AS-PATH is better
+                        if (newPath.length < currentBest.path.length) {
+                            log(`AS${this.id} 路由优选: ${pfx} 发现更短 AS-PATH。`, 'text-yellow-400');
+                            this.rib[pfx] = { path: newPath, nextHopAs: peerId, best: true };
+                            ribChanged = true;
+                        }
+                    }
+                }
+
+                if(ribChanged) {
+                    log(`AS${this.id} RIB更新 -> 触发增量更新通知邻居。`, 'edu');
+                    Object.keys(this.neighbors).forEach(nid => {
+                        if(parseInt(nid) !== peerId) this.sendUpdate(parseInt(nid));
+                    });
+                    this.updateUI();
+                }
+            }
+        }
+        updateUI() {
+            const el = document.getElementById(`node-ui-${this.id}`);
+            if(el) el.innerHTML = `${Object.keys(this.rib).length} Routes`;
+            if(selectedAsId === this.id) showDetails(this.id);
+        }
+    }
+
+    // --- System ---
+    function init() {
+        addAS(100, 100); addAS(300, 250); addAS(600, 200);
+        connect(100, 200); connect(200, 300);
+        requestAnimationFrame(loop);
+        setInterval(() => {
+            if(Math.random()>0.7 && ases.length<8) {
+                addAS(Math.random()*600+50, Math.random()*400+50);
+            }
+        }, 6000);
+    }
+
+    function addAS(x, y) {
+        const id = asCounter; asCounter += 100;
+        const as = new ASNode(id, x, y); ases.push(as);
+        const div = document.createElement('div');
+        div.className = 'absolute flex flex-col items-center router-node z-20';
+        div.style.left = x+'px'; div.style.top = y+'px'; div.style.transform = 'translate(-50%, -50%)';
+        div.onclick = () => showDetails(id);
+        div.innerHTML = `<div class="router-icon w-12 h-12 rounded bg-purple-900 border-2 border-purple-500 flex items-center justify-center text-white font-bold shadow-lg text-xs">AS${id}</div><div id="node-ui-${id}" class="mt-1 bg-black/60 text-purple-200 text-[10px] px-1 rounded border border-purple-900">1 Routes</div>`;
+        document.getElementById('nodes-layer').appendChild(div);
+        log(`AS${id} 上线。`, 'text-purple-400');
+        if(ases.length > 1) {
+            const target = ases.filter(a => a!==as).sort((a,b)=>((a.x-x)**2+(a.y-y)**2)-((b.x-x)**2+(b.y-y)**2))[0];
+            connect(id, target.id);
+        }
+    }
+    function connect(id1, id2) {
+        if(links.find(l=>(l.a===id1&&l.b===id2)||(l.a===id2&&l.b===id1)))return;
+        links.push({a:id1,b:id2});
+        ases.find(a=>a.id===id1).addNeighbor(id2); ases.find(a=>a.id===id2).addNeighbor(id1);
+        drawLinks();
+    }
+    function drawLinks(){
+        const svg=document.getElementById('links-layer'); svg.innerHTML='';
+        links.forEach(l=>{
+            const a1=ases.find(x=>x.id===l.a),a2=ases.find(x=>x.id===l.b);
+            if(a1&&a2){const line=document.createElementNS('http://www.w3.org/2000/svg','line');
+                line.setAttribute('x1',a1.x);line.setAttribute('y1',a1.y);line.setAttribute('x2',a2.x);line.setAttribute('y2',a2.y);
+                line.setAttribute('stroke','#4c1d95');line.setAttribute('stroke-width',2);line.setAttribute('stroke-dasharray','5,5');svg.appendChild(line);}
+        });
+    }
+    function loop() {
+        const now = Date.now(); ases.forEach(a=>a.update(now));
+        for(let i=packets.length-1; i>=0; i--) {
+            if(packets[i].update()){
+                const dst=ases.find(a=>a.id===packets[i].dstAs);
+                if(dst) dst.receivePacket(packets[i]);
+                packets.splice(i,1);
+            }
+        }
+        document.getElementById('as-count').innerText = ases.length;
+        requestAnimationFrame(loop);
+    }
+    function showDetails(id) {
+        selectedAsId = id; const as = ases.find(a => a.id === id);
+        document.getElementById('modal').classList.remove('hidden'); document.getElementById('modal-title').innerText = `AS${id} 详情`;
+        const tbody = document.getElementById('rib-body'); tbody.innerHTML = '';
+        for(const pfx in as.rib) {
+            const r = as.rib[pfx];
+            let pathHtml = ''; r.path.forEach(p => { pathHtml += `<span class="as-badge mr-1">${p}</span>`; });
+            tbody.innerHTML += `<tr class="border-b border-gray-800"><td class="text-blue-300">${pfx}</td><td>${r.nextHopAs}</td><td>${pathHtml}</td><td>${r.best?'<span class="text-green-500">> Best</span>':'Valid'}</td></tr>`;
+        }
+        document.getElementById('neighbor-state').innerText = JSON.stringify(as.neighbors, null, 2);
+    }
+    function closeModal(){selectedAsId=null;document.getElementById('modal').classList.add('hidden');}
+    init();
+</script>
+</body>
+</html>

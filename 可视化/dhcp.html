@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DHCP & ICMP 全链路模拟器 (解耦版)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; background-color: #111827; color: #f3f4f6; }
+        .terminal-scroll::-webkit-scrollbar { width: 6px; }
+        .terminal-scroll::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+
+        /* --- Devices --- */
+        .device { transition: left 0.5s ease, top 0.5s ease; cursor: pointer; position: absolute; transform: translate(-50%, -50%); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 20; }
+        .device-body { width: 64px; height: 64px; display: flex; align-items: center; justify-content: center; border-radius: 12px; font-weight: bold; box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.5); border: 2px solid; position: relative; background-color: #1f2937; transition: transform 0.2s; }
+        .device:hover .device-body { transform: scale(1.1); border-color: white; }
+
+        .device-label { margin-top: 8px; font-size: 11px; color: #d1d5db; background: rgba(0,0,0,0.6); padding: 2px 6px; border-radius: 4px; white-space: nowrap; text-align: center; backdrop-filter: blur(2px); }
+        .ip-tag { color: #60a5fa; font-weight: bold; font-family: monospace; }
+        .mac-tag { color: #9ca3af; font-size: 9px; font-family: monospace; }
+
+        /* --- Packets --- */
+        .packet-container { position: absolute; pointer-events: none; z-index: 50; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: transform 0.05s linear; }
+        .packet-body { width: 14px; height: 14px; border-radius: 50%; border: 2px solid white; box-shadow: 0 0 10px currentColor; }
+        .packet-label { font-size: 10px; font-weight: bold; color: white; text-shadow: 0 1px 2px black; margin-top: 2px; white-space: nowrap; background: rgba(0,0,0,0.5); padding: 0 4px; border-radius: 4px; }
+
+        .pkt-dhcp { color: #3b82f6; background-color: #3b82f6; }
+        .pkt-arp { color: #f59e0b; background-color: #f59e0b; }
+        .pkt-icmp { color: #ec4899; background-color: #ec4899; }
+
+        /* --- Toast --- */
+        .toast { position: absolute; top: -40px; left: 50%; transform: translateX(-50%); background: white; color: black; padding: 4px 8px; border-radius: 8px; font-size: 11px; font-weight: bold; white-space: nowrap; pointer-events: none; z-index: 60; box-shadow: 0 4px 6px rgba(0,0,0,0.3); opacity: 0; animation: popUp 2.5s ease-out forwards; }
+        .toast::after { content: ''; position: absolute; bottom: -4px; left: 50%; transform: translateX(-50%); border-width: 4px 4px 0; border-style: solid; border-color: white transparent transparent transparent; }
+        @keyframes popUp {
+            0% { opacity: 0; transform: translate(-50%, 10px) scale(0.8); }
+            10% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            80% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+            100% { opacity: 0; transform: translate(-50%, -10px); }
+        }
+
+        /* --- Layout --- */
+        .glass-panel { background: rgba(31, 41, 55, 0.8); backdrop-filter: blur(8px); border: 1px solid rgba(75, 85, 99, 0.5); }
+        .monitor-table th, .monitor-table td { padding: 6px 8px; font-size: 11px; border-bottom: 1px solid #374151; }
+        .monitor-table th { color: #9ca3af; text-align: left; font-weight: 600; }
+        .highlight-row { animation: flashRow 1.5s ease-out; }
+        @keyframes flashRow { 0% { background-color: #374151; } 100% { background-color: transparent; } }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 h-screen flex flex-col overflow-hidden">
+
+<header class="h-16 bg-gray-800/90 border-b border-gray-700 flex items-center justify-between px-6 shrink-0 shadow-lg z-50 backdrop-blur-sm">
+    <div>
+        <h1 class="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-purple-400">网络协议可视化: DHCP & ICMP</h1>
+        <div class="text-xs text-gray-400 mt-1 flex gap-4">
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-blue-500"></span> DHCP</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-yellow-500"></span> ARP</span>
+            <span class="flex items-center gap-1"><span class="w-2 h-2 rounded-full bg-pink-500"></span> ICMP</span>
+        </div>
+    </div>
+    <div class="flex gap-3">
+        <button onclick="toggleDualServer()" id="btn-dual" class="bg-gray-700 hover:bg-gray-600 text-white px-3 py-2 rounded-lg text-xs font-bold transition shadow-lg border border-gray-600">
+            📡 启用双 DHCP 服务器
+        </button>
+        <div class="w-px bg-gray-600 h-8 mx-1"></div>
+        <button onclick="addPC()" class="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition shadow-lg flex items-center gap-2 transform active:scale-95">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"></path></svg>
+            添加新 PC
+        </button>
+        <button onclick="pingGateway()" class="bg-pink-600 hover:bg-pink-500 text-white px-4 py-2 rounded-lg text-sm font-bold transition shadow-lg flex items-center gap-2 transform active:scale-95">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"></path></svg>
+            Ping 网关
+        </button>
+    </div>
+</header>
+
+<div class="flex-1 flex overflow-hidden relative">
+    <!-- Log Panel -->
+    <div class="w-1/4 min-w-[320px] bg-gray-900 border-r border-gray-700 flex flex-col z-10 shadow-2xl">
+        <div class="p-3 bg-gray-800 text-xs font-bold text-gray-300 border-b border-gray-700 flex justify-between items-center">
+            <span>协议交互日志</span>
+            <button onclick="clearLogs()" class="text-gray-500 hover:text-white px-2 py-1 rounded hover:bg-gray-700 transition">清空</button>
+        </div>
+        <div id="log-container" class="flex-1 p-4 overflow-y-auto terminal-scroll text-xs font-mono space-y-3">
+            <div class="text-gray-500 italic text-center mt-10">准备就绪</div>
+        </div>
+    </div>
+
+    <!-- Center Topology -->
+    <div class="flex-1 relative bg-gray-950 overflow-hidden" id="canvas-container">
+        <div class="absolute inset-0 opacity-10" style="background-image: radial-gradient(#4b5563 1px, transparent 1px); background-size: 20px 20px;"></div>
+        <svg id="links-layer" class="absolute inset-0 w-full h-full pointer-events-none"></svg>
+        <div id="devices-layer" class="absolute inset-0 w-full h-full"></div>
+        <div id="packets-layer" class="absolute inset-0 w-full h-full pointer-events-none"></div>
+
+        <div class="absolute bottom-6 left-6 glass-panel p-3 rounded-lg text-xs text-gray-400 pointer-events-none select-none">
+            <div class="font-bold text-gray-200 mb-1">拓扑说明</div>
+            <div class="flex gap-2 mb-1"><span class="w-3 h-3 rounded bg-purple-600 inline-block"></span> 路由器 (网关): 192.168.1.1</div>
+            <div class="flex gap-2"><span class="w-3 h-3 rounded bg-orange-600 inline-block"></span> DHCP 服务器: 192.168.1.2</div>
+        </div>
+    </div>
+
+    <!-- Right Info Panel -->
+    <div class="w-1/4 min-w-[300px] bg-gray-800 border-l border-gray-700 flex flex-col z-10 shadow-2xl">
+        <div class="flex-1 flex flex-col border-b border-gray-700 overflow-hidden">
+            <div class="p-3 bg-gray-700/50 text-xs font-bold text-blue-300 border-b border-gray-600">交换机 MAC 地址表</div>
+            <div class="flex-1 overflow-auto bg-gray-900 p-2">
+                <table class="w-full monitor-table text-gray-300"><thead><tr><th>MAC</th><th>端口</th><th>状态</th></tr></thead><tbody id="mac-table-body"></tbody></table>
+            </div>
+        </div>
+        <div class="flex-1 flex flex-col overflow-hidden">
+            <div class="p-3 bg-gray-700/50 text-xs font-bold text-green-300 border-b border-gray-600">DHCP 服务器租约</div>
+            <div class="flex-1 overflow-auto bg-gray-900 p-2">
+                <table class="w-full monitor-table text-gray-300"><thead><tr><th>IP</th><th>MAC</th><th>Server</th></tr></thead><tbody id="router-table-body"></tbody></table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // --- Config ---
+    const CONFIG = {
+        PACKET_SPEED: 0.6,
+        MAC_AGE_TIME: 300,
+        ROUTER_IP: "192.168.1.1",
+        ROUTER_MAC: "RR:RR:RR:RR:RR:01",
+        DHCP1_IP: "192.168.1.2",
+        DHCP1_MAC: "DD:DD:DD:DD:DD:01",
+        DHCP2_IP: "192.168.1.3",
+        DHCP2_MAC: "DD:DD:DD:DD:DD:02",
+        SWITCH_ID: "SW1",
+        BROADCAST_MAC: "FF:FF:FF:FF:FF:FF"
+    };
+
+    let devices = [], links = [], packets = [], pcCounter = 1, dualServerMode = false;
+
+    // --- Classes ---
+    class Packet {
+        constructor(type, label, srcDev, dstDev, srcMAC, dstMAC, payload, colorClass) {
+            this.type = type; this.label = label; this.srcDev = srcDev; this.dstDev = dstDev; this.srcMAC = srcMAC; this.dstMAC = dstMAC; this.payload = payload;
+            if (!srcDev || !dstDev) { console.error("Invalid packet endpoints"); return; }
+            this.x = srcDev.x; this.y = srcDev.y; this.tx = dstDev.x; this.ty = dstDev.y;
+            this.el = document.createElement('div'); this.el.className = 'packet-container';
+            this.el.innerHTML = `<div class="packet-body ${colorClass}"></div><div class="packet-label">${label}</div>`;
+            document.getElementById('packets-layer').appendChild(this.el);
+        }
+        update() {
+            this.tx = this.dstDev.x; this.ty = this.dstDev.y;
+            const dx = this.tx - this.x, dy = this.ty - this.y, dist = Math.sqrt(dx*dx+dy*dy);
+            if(dist < CONFIG.PACKET_SPEED*2) { this.el.remove(); return true; }
+            this.x += (dx/dist)*CONFIG.PACKET_SPEED; this.y += (dy/dist)*CONFIG.PACKET_SPEED;
+            this.el.style.transform = `translate(${this.x}px, ${this.y}px)`; return false;
+        }
+    }
+
+    class Device {
+        constructor(id, type, x, y, mac, ip = "0.0.0.0") {
+            this.id = id; this.type = type; this.x = x; this.y = y; this.mac = mac; this.ip = ip;
+            this.port = null; this.arpTable = {}; this.dhcpState = 'INIT';
+            this.render();
+        }
+        render() {
+            const el = document.createElement('div'); el.className = 'device'; el.id = `dev-${this.id}`;
+            this.updatePositionDOM(el);
+            let borderColor = 'border-gray-500', iconText = 'PC', iconClass = 'text-xl', textColor = 'text-gray-200';
+            if(this.type === 'ROUTER') { borderColor = 'border-purple-600'; iconText = '路由'; iconClass = 'text-sm'; textColor='text-purple-400'; }
+            else if(this.type === 'SWITCH') { borderColor = 'border-blue-500'; iconText = '交换机'; iconClass = 'text-xs'; textColor='text-blue-300'; }
+            else if(this.type === 'SERVER') { borderColor = 'border-orange-500'; iconText = 'DHCP'; iconClass = 'text-sm'; textColor='text-orange-400'; }
+            else { borderColor = 'border-green-500'; iconText = 'PC'; }
+
+            el.innerHTML = `<div class="device-toast-anchor relative"></div><div class="device-body ${borderColor}"><span class="${iconClass} ${textColor} font-bold">${iconText}</span></div><div class="device-label"><div class="font-bold text-gray-100">${this.id}</div><div class="mac-tag">${this.mac}</div>${this.type !== 'SWITCH' ? `<div id="ip-${this.id}" class="ip-tag">${this.ip}</div>` : ''}</div>`;
+            document.getElementById('devices-layer').appendChild(el);
+        }
+        updatePositionDOM(element = null) {
+            const el = element || document.getElementById(`dev-${this.id}`);
+            if (el) { el.style.left = `${this.x}px`; el.style.top = `${this.y}px`; }
+        }
+        updateIPDisplay() { const el = document.getElementById(`ip-${this.id}`); if(el) el.innerText = this.ip; }
+        showToast(msg, color='text-gray-800') {
+            const anchor = document.querySelector(`#dev-${this.id} .device-toast-anchor`);
+            if(!anchor) return;
+            const t = document.createElement('div'); t.className = 'toast'; t.innerText = msg;
+            if(color === 'green') t.style.color = '#059669'; if(color === 'blue') t.style.color = '#2563eb'; if(color === 'red') t.style.color = '#dc2626'; if(color === 'purple') t.style.color = '#7c3aed'; if(color === 'gray') t.style.color = '#6b7280'; if(color === 'orange') t.style.color = '#d97706';
+            anchor.appendChild(t); setTimeout(() => t.remove(), 2600);
+        }
+        receive(packet, portIn) {}
+    }
+
+    class Switch extends Device {
+        constructor(id, x, y) { super(id, 'SWITCH', x, y, '00:00:00:00:00:00'); this.macTable = {}; }
+        receive(packet, fromPort) {
+            if(packet.srcMAC && packet.srcMAC !== CONFIG.BROADCAST_MAC) {
+                if(!this.macTable[packet.srcMAC] || this.macTable[packet.srcMAC].port !== fromPort) {
+                    this.showToast(`📝 学习`, 'blue'); updateMacTableUI(packet.srcMAC);
+                }
+                this.macTable[packet.srcMAC] = { port: fromPort, ttl: CONFIG.MAC_AGE_TIME };
+            }
+            const entry = this.macTable[packet.dstMAC];
+            if (packet.dstMAC === CONFIG.BROADCAST_MAC) { this.showToast(`📢 广播`, 'red'); this.flood(packet, fromPort); }
+            else if (entry) { this.forward(packet, entry.port); }
+            else { this.showToast(`❓ 未知->泛洪`, 'red'); this.flood(packet, fromPort); }
+        }
+        forward(packet, port) {
+            const link = links.find(l => l.port === port);
+            if(link) { const target = devices.find(d => d.id === link.devId); if(target) sendVisualPacket(this, target, packet); }
+        }
+        flood(packet, excludePort) {
+            links.forEach(link => {
+                if (link.port !== excludePort) { const target = devices.find(d => d.id === link.devId); if(target) sendVisualPacket(this, target, packet); }
+            });
+        }
+    }
+
+    class Router extends Device {
+        constructor(id, x, y, ip, mac) { super(id, 'ROUTER', x, y, mac, ip); }
+        receive(packet) {
+            if (packet.dstMAC !== this.mac && packet.dstMAC !== CONFIG.BROADCAST_MAC) return;
+            const proto = packet.payload.proto;
+
+            // 路由器现在只负责 ARP 和 ICMP，不响应 DHCP
+            if (proto === 'DHCP') {
+                // Ignore DHCP packets
+                return;
+            }
+
+            else if (proto === 'ARP' && packet.payload.targetIP === this.ip) {
+                this.showToast(`我是网关!`, 'purple');
+                this.arpTable[packet.payload.senderIP] = packet.srcMAC;
+                this.reply(packet.srcMAC, 'ARP', 'Reply', { op: 'REPLY', senderMAC: this.mac, senderIP: this.ip, targetMAC: packet.srcMAC, targetIP: packet.payload.senderIP });
+            } else if (proto === 'ICMP' && packet.dstMAC === this.mac) {
+                this.showToast(`Ping Reply`, 'green');
+                this.reply(packet.srcMAC, 'ICMP', 'Reply', { type: 'ECHO_REPLY', id: packet.payload.id });
+            }
+        }
+        reply(dstMAC, proto, label, payload) { sendFrame(this, dstMAC, proto, label, payload); }
+    }
+
+    class DHCPServer extends Device {
+        constructor(id, x, y, ip, mac, poolStart) {
+            super(id, 'SERVER', x, y, mac, ip);
+            this.dhcpPool = poolStart;
+            this.dhcpLeases = {};
+        }
+        receive(packet) {
+            if (packet.dstMAC !== this.mac && packet.dstMAC !== CONFIG.BROADCAST_MAC) return;
+            const proto = packet.payload.proto;
+            if (proto === 'DHCP') {
+                const type = packet.payload.dhcpType;
+                if (type === 'DISCOVER') {
+                    setTimeout(() => {
+                        this.showToast(`提供 Offer`, 'orange');
+                        let ip = this.dhcpLeases[packet.srcMAC] || `192.168.1.${this.dhcpPool++}`;
+                        this.dhcpLeases[packet.srcMAC] = ip; updateServerTableUI();
+                        this.reply(packet.srcMAC, 'DHCP', `Offer`, { dhcpType: 'OFFER', offeredIP: ip, serverIP: this.ip });
+                    }, Math.random() * 500 + 200);
+                } else if (type === 'REQUEST') {
+                    if (packet.payload.serverIP === this.ip) {
+                        this.showToast(`✅ 确认租约`, 'green');
+                        this.reply(packet.srcMAC, 'DHCP', 'ACK', { dhcpType: 'ACK', assignedIP: packet.payload.reqIP, serverIP: this.ip });
+                    } else { this.showToast(`🚫 忽略`, 'gray'); }
+                }
+            }
+        }
+        reply(dstMAC, proto, label, payload) { sendFrame(this, dstMAC, proto, label, payload); }
+    }
+
+    class PC extends Device {
+        constructor(id, x, y, staticIP=null) {
+            super(id, 'PC', x, y, generateRandomMAC(), staticIP || "0.0.0.0");
+            if (staticIP) { this.dhcpState = 'BOUND'; this.showToast("稳定", 'gray'); } else { setTimeout(() => this.startDHCP(), 800); }
+        }
+        startDHCP() {
+            this.showToast(`Discover广播`, 'blue');
+            log(`[${this.id}] 广播 DHCP Discover`, 'dhcp');
+            sendFrame(this, CONFIG.BROADCAST_MAC, 'DHCP', 'Discover', { dhcpType: 'DISCOVER' });
+            this.dhcpState = 'SELECTING';
+        }
+        ping(targetIP) {
+            if(this.ip === '0.0.0.0') { this.showToast(`无IP`, 'red'); return; }
+            const mac = this.arpTable[targetIP];
+            if (mac) { this.showToast(`Ping...`, 'green'); sendFrame(this, mac, 'ICMP', 'Ping', { type: 'ECHO_REQUEST', id: Date.now() }); }
+            else { this.showToast(`ARP请求`, 'yellow'); sendFrame(this, CONFIG.BROADCAST_MAC, 'ARP', 'Who?', { op: 'REQUEST', senderMAC: this.mac, senderIP: this.ip, targetIP: targetIP }); }
+        }
+        receive(packet) {
+            if (packet.dstMAC !== this.mac && packet.dstMAC !== CONFIG.BROADCAST_MAC) return;
+            const payload = packet.payload;
+            if (payload.proto === 'DHCP') {
+                if (this.dhcpState === 'SELECTING' && payload.dhcpType === 'OFFER') {
+                    this.showToast(`选中${payload.serverIP}`, 'green');
+                    log(`[${this.id}] 选中服务器 ${payload.serverIP}`, 'dhcp');
+                    sendFrame(this, CONFIG.BROADCAST_MAC, 'DHCP', 'Request', { dhcpType: 'REQUEST', reqIP: payload.offeredIP, serverIP: payload.serverIP });
+                    this.dhcpState = 'REQUESTING';
+                } else if (this.dhcpState === 'REQUESTING' && payload.dhcpType === 'ACK') {
+                    this.ip = payload.assignedIP; this.dhcpState = 'BOUND'; this.updateIPDisplay(); this.showToast(`获得IP`, 'green');
+                }
+            } else if (payload.proto === 'ARP' && payload.op === 'REPLY') {
+                this.arpTable[payload.senderIP] = payload.senderMAC;
+                setTimeout(() => sendFrame(this, payload.senderMAC, 'ICMP', 'Ping', { type: 'ECHO_REQUEST', id: Date.now() }), 500);
+            } else if (payload.proto === 'ICMP' && payload.type === 'ECHO_REPLY') { this.showToast(`Ping通!`, 'green'); }
+        }
+    }
+
+    // --- Logic ---
+    function getCanvasCenter() {
+        const c = document.getElementById('canvas-container');
+        return c ? { x: c.clientWidth / 2, y: c.clientHeight / 2 } : { x: 300, y: 300 };
+    }
+
+    let switchDev, routerDev, dhcpServer1, dhcpServer2;
+
+    function repositionDevices() {
+        const center = getCanvasCenter();
+        if(switchDev) { switchDev.x = center.x; switchDev.y = center.y; switchDev.updatePositionDOM(); }
+
+        // Router Layout (Always Top Center)
+        if(routerDev) { routerDev.x = center.x; routerDev.y = center.y - 180; routerDev.updatePositionDOM(); }
+
+        // DHCP Servers Layout (Left and Right of Switch)
+        if(dhcpServer1) { dhcpServer1.x = center.x - 180; dhcpServer1.y = center.y - 50; dhcpServer1.updatePositionDOM(); }
+        if(dhcpServer2) { dhcpServer2.x = center.x + 180; dhcpServer2.y = center.y - 50; dhcpServer2.updatePositionDOM(); }
+
+        // PC Layout (Semi-circle Fan at Bottom)
+        const pcs = devices.filter(d => d.type === 'PC');
+        const count = pcs.length;
+        if(count > 0) {
+            const radius = 220;
+            const startAngle = 160 * (Math.PI / 180);
+            const endAngle = 20 * (Math.PI / 180);
+            const totalSpan = startAngle - endAngle;
+
+            pcs.forEach((pc, index) => {
+                let angle;
+                if (count === 1) angle = 90 * (Math.PI / 180);
+                else {
+                    const step = totalSpan / (count - 1);
+                    angle = startAngle - (step * index);
+                }
+                pc.x = center.x + Math.cos(angle) * radius;
+                pc.y = center.y + Math.sin(angle) * radius;
+                pc.updatePositionDOM();
+            });
+        }
+        drawAllLinks();
+    }
+
+    function drawAllLinks() {
+        const svg = document.getElementById('links-layer'); svg.innerHTML = '';
+        links.forEach(l => {
+            const d1 = devices.find(d => d.id === l.devId);
+            if(d1 && switchDev) {
+                const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                line.setAttribute('x1', d1.x); line.setAttribute('y1', d1.y);
+                line.setAttribute('x2', switchDev.x); line.setAttribute('y2', switchDev.y);
+                line.setAttribute('stroke', '#4b5563'); line.setAttribute('stroke-width', '2');
+                svg.appendChild(line);
+            }
+        });
+    }
+
+    function init() {
+        devices = []; links = []; packets = []; pcCounter = 1;
+        document.getElementById('devices-layer').innerHTML = '';
+        document.getElementById('links-layer').innerHTML = '';
+
+        const c = getCanvasCenter();
+        switchDev = new Switch(CONFIG.SWITCH_ID, c.x, c.y);
+        routerDev = new Router('GW', c.x, c.y - 180, CONFIG.ROUTER_IP, CONFIG.ROUTER_MAC);
+        dhcpServer1 = new DHCPServer('DHCP1', c.x - 180, c.y - 50, CONFIG.DHCP1_IP, CONFIG.DHCP1_MAC, 100);
+
+        devices.push(switchDev, routerDev, dhcpServer1);
+        links.push({ devId: routerDev.id, port: 0 });
+        links.push({ devId: dhcpServer1.id, port: 1 });
+
+        // Static PCs
+        const pc1 = new PC(`PC${pcCounter++}`, 0, 0, "192.168.1.10");
+        const pc2 = new PC(`PC${pcCounter++}`, 0, 0, "192.168.1.11");
+        const pc3 = new PC(`PC${pcCounter++}`, 0, 0, "192.168.1.12");
+        devices.push(pc1, pc2, pc3);
+        links.push({ devId: pc1.id, port: 10 }, { devId: pc2.id, port: 11 }, { devId: pc3.id, port: 12 });
+
+        [pc1, pc2, pc3].forEach(pc => switchDev.macTable[pc.mac] = { port: links.find(l=>l.devId===pc.id).port, ttl: 999 });
+        updateMacTableUI();
+
+        repositionDevices();
+        window.addEventListener('resize', repositionDevices);
+        requestAnimationFrame(loop);
+    }
+
+    function addPC() {
+        const id = `PC${pcCounter++}`;
+        const pc = new PC(id, 0, 0);
+        devices.push(pc);
+        links.push({ devId: id, port: pcCounter + 20 });
+        repositionDevices();
+        log(`[操作] 接入新主机 ${id}`, 'edu');
+    }
+
+    function toggleDualServer() {
+        const btn = document.getElementById('btn-dual');
+        const c = getCanvasCenter();
+        dualServerMode = !dualServerMode;
+
+        if (dualServerMode) {
+            btn.innerText = "📡 禁用双服务器"; btn.classList.replace('bg-gray-700', 'bg-purple-700');
+            dhcpServer2 = new DHCPServer('DHCP2', c.x + 180, c.y - 50, CONFIG.DHCP2_IP, CONFIG.DHCP2_MAC, 200);
+            devices.push(dhcpServer2);
+            links.push({ devId: dhcpServer2.id, port: 2 });
+            log(`[系统] 接入第二台 DHCP 服务器 (DHCP2)`, 'edu');
+        } else {
+            btn.innerText = "📡 启用双 DHCP 服务器"; btn.classList.replace('bg-purple-700', 'bg-gray-700');
+            devices = devices.filter(d => d !== dhcpServer2);
+            links = links.filter(l => l.devId !== dhcpServer2.id);
+            document.getElementById(`dev-${dhcpServer2.id}`).remove();
+            dhcpServer2 = null;
+            log(`[系统] 移除第二台服务器`, 'edu');
+        }
+        repositionDevices();
+    }
+
+    // --- Shared Utils ---
+    function sendFrame(src, dstMAC, proto, label, payload) {
+        const color = proto==='DHCP'?'pkt-dhcp':(proto==='ARP'?'pkt-arp':'pkt-icmp');
+        packets.push(new Packet(proto, label, src, switchDev, src.mac, dstMAC, {proto,...payload}, color));
+    }
+    function sendVisualPacket(src, dst, orig) {
+        const color = orig.type==='DHCP'?'pkt-dhcp':(orig.type==='ARP'?'pkt-arp':'pkt-icmp');
+        packets.push(new Packet(orig.type, orig.label, src, dst, orig.srcMAC, orig.dstMAC, orig.payload, color));
+    }
+    function generateRandomMAC() { const h="0123456789ABCDEF"; let m="00:0C"; for(let i=0;i<4;i++) m+=":"+h[Math.floor(Math.random()*16)]+h[Math.floor(Math.random()*16)]; return m; }
+    function updateMacTableUI(h) {
+        const tb = document.getElementById('mac-table-body'); tb.innerHTML='';
+        for(const m in switchDev.macTable) {
+            const r=document.createElement('tr'); if(m===h) r.className='highlight-row bg-blue-900/30';
+            r.innerHTML=`<td class="font-mono text-blue-300">${m}</td><td>${switchDev.macTable[m].port}</td><td>✅</td>`; tb.appendChild(r);
+        }
+    }
+    function updateServerTableUI() {
+        const tb = document.getElementById('router-table-body'); tb.innerHTML='';
+        [dhcpServer1, dhcpServer2].forEach(r => {
+            if(!r) return;
+            for(const m in r.dhcpLeases) {
+                const tr=document.createElement('tr');
+                tr.innerHTML=`<td class="text-blue-400">${r.dhcpLeases[m]}</td><td class="text-gray-400 text-[10px]">${m}</td><td class="text-[10px]">${r.id}</td>`; tb.appendChild(tr);
+            }
+        });
+    }
+    function pingGateway() { const pcs=devices.filter(d=>d.type==='PC'); if(pcs.length) pcs[pcs.length-1].ping(CONFIG.ROUTER_IP); }
+    function clearLogs() { document.getElementById('log-container').innerHTML = ''; }
+    function log(m,t) {
+        const c=document.getElementById('log-container'), d=document.createElement('div');
+        let cl='text-gray-400'; if(t==='dhcp') cl='text-blue-400'; if(t==='arp') cl='text-yellow-400'; if(t==='icmp') cl='text-pink-400'; if(t==='edu') cl='text-green-400 font-bold';
+        d.className=`py-1 border-b border-gray-800 ${cl}`; d.innerText=m; c.prepend(d);
+    }
+    function loop() {
+        for(let i=packets.length-1; i>=0; i--) {
+            const p=packets[i];
+            if(p.update()) {
+                if(p.dstDev === switchDev) {
+                    const l = links.find(k => k.devId === p.srcDev.id);
+                    switchDev.receive(p, l ? l.port : -1);
+                } else { p.dstDev.receive(p); }
+                packets.splice(i, 1);
+            }
+        }
+        requestAnimationFrame(loop);
+    }
+    init();
+</script>
+</body>
+</html>
