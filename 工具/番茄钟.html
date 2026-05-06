@@ -1,0 +1,879 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>共和国生产力伴学终端 v3.0</title>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@400;700;900&family=Oswald:wght@400;700&family=Share+Tech+Mono&display=swap');
+
+        :root {
+            --ml-red: #8b0000;
+            --ml-red-dim: #590000;
+            --ml-red-bright: #d40000;
+            --ml-beige: #e6e1d5;
+            --ml-beige-dark: #d1cbb8;
+            --ml-border: #2c241b;
+            --ml-text: #1a1a1a;
+            --ml-gold: #f0c430;
+            --ml-green: #2e7d32;
+            --ml-green-bright: #4caf50;
+            --ml-black: #121212;
+        }
+
+        * { box-sizing: border-box; user-select: none; }
+
+        body {
+            background-color: var(--ml-border);
+            color: var(--ml-text);
+            font-family: 'Noto Serif SC', serif;
+            margin: 0;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* --- 背景纹理 & CRT 效果 --- */
+        .guilloche-bg {
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: var(--ml-beige);
+            background-image:
+                    repeating-radial-gradient(circle at 50% 50%, transparent 0, rgba(139, 0, 0, 0.03) 2px, transparent 4px),
+                    repeating-linear-gradient(45deg, rgba(44, 36, 27, 0.05) 0, rgba(44, 36, 27, 0.05) 1px, transparent 1px, transparent 10px);
+            z-index: -2;
+        }
+
+        .crt-overlay {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.1) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
+            background-size: 100% 2px, 3px 100%;
+            pointer-events: none;
+            z-index: 100;
+            opacity: 0.4;
+            mix-blend-mode: overlay;
+        }
+
+        /* --- 主容器 --- */
+        .terminal-frame {
+            width: 95%; max-width: 1100px;
+            height: 90vh;
+            border: 8px solid var(--ml-border);
+            background: #fdfbf7;
+            box-shadow:
+                    0 0 0 4px #e6e1d5,
+                    0 20px 50px rgba(0,0,0,0.6);
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* --- 顶部状态栏 --- */
+        .status-bar {
+            height: 40px;
+            background: var(--ml-border);
+            color: var(--ml-beige);
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 0 15px;
+            font-family: 'Share Tech Mono', monospace;
+            border-bottom: 4px solid var(--ml-red);
+            font-size: 14px;
+        }
+        .status-item { display: flex; align-items: center; gap: 8px; }
+        .blink { animation: blink 2s infinite; }
+
+        /* --- 核心布局 --- */
+        .main-deck {
+            flex: 1;
+            display: flex;
+            position: relative;
+        }
+
+        /* 左侧：控制面板 */
+        .control-column {
+            width: 300px;
+            background: #e6e1d5;
+            border-right: 4px solid var(--ml-border);
+            display: flex; flex-direction: column;
+            padding: 20px;
+            gap: 20px;
+            overflow-y: auto;
+        }
+
+        .panel-block {
+            border: 2px solid var(--ml-border);
+            background: #fdfbf7;
+            padding: 12px;
+            position: relative;
+            box-shadow: 4px 4px 0 rgba(0,0,0,0.1);
+        }
+        .panel-title {
+            position: absolute; top: -10px; left: 10px;
+            background: #fdfbf7; padding: 0 5px;
+            font-family: 'Oswald'; font-size: 12px; color: var(--ml-red);
+            font-weight: 700; letter-spacing: 1px;
+        }
+
+        /* 时间调节器 */
+        .time-adjuster {
+            display: flex; flex-direction: column; align-items: center; gap: 10px;
+        }
+        .adjust-btn-row { display: flex; gap: 10px; width: 100%; }
+        .adjust-btn {
+            flex: 1;
+            background: var(--ml-border); color: var(--ml-beige);
+            border: none; padding: 8px;
+            font-family: 'Share Tech Mono'; font-size: 18px;
+            cursor: pointer; box-shadow: 2px 2px 0 rgba(0,0,0,0.3);
+            transition: transform 0.1s;
+        }
+        .adjust-btn:active { transform: translate(1px, 1px); box-shadow: inset 2px 2px 0 rgba(0,0,0,0.5); }
+
+        .preset-btn {
+            width: 100%; background: #d1cbb8; border: 1px solid var(--ml-border);
+            padding: 6px; font-family: 'Noto Serif SC'; font-weight: bold; font-size: 12px;
+            cursor: pointer; margin-top: 4px; text-align: left;
+            display: flex; justify-content: space-between;
+            transition: background 0.1s;
+        }
+        .preset-btn:hover { background: #fff; }
+
+        /* 音频控制 */
+        .audio-channels { display: flex; flex-direction: column; gap: 6px; }
+        .channel-btn {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px; background: #f0ebd8; border: 1px solid #999;
+            cursor: pointer; font-size: 12px; font-weight: bold;
+            transition: all 0.2s;
+            position: relative;
+            overflow: hidden;
+        }
+        .channel-btn:hover { background: #fff; border-color: var(--ml-border); }
+        .channel-btn.active {
+            background: var(--ml-border); color: #e6e1d5; border-color: var(--ml-border);
+        }
+        .channel-status { width: 8px; height: 8px; background: #ccc; border-radius: 50%; border: 1px solid #555; }
+        .channel-btn.active .channel-status { background: #00ff00; box-shadow: 0 0 6px #00ff00; border-color: #00ff00; }
+
+        /* 音量滑块 */
+        input[type=range] {
+            width: 100%; margin-top: 10px;
+            -webkit-appearance: none; background: transparent;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 16px; width: 16px;
+            background: var(--ml-red); cursor: pointer; margin-top: -6px;
+            border: 2px solid #fff; box-shadow: 1px 1px 3px rgba(0,0,0,0.3);
+        }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 4px; background: #999; border-radius: 2px;
+        }
+
+        /* 中间：显示器 */
+        .monitor-column {
+            flex: 1;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            position: relative;
+            background-image: radial-gradient(#d1cbb8 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        /* 倒计时圆盘 */
+        .timer-container {
+            position: relative;
+            width: 360px; height: 360px;
+            display: flex; align-items: center; justify-content: center;
+            margin-bottom: 30px;
+        }
+        .timer-svg { transform: rotate(-90deg); width: 100%; height: 100%; filter: drop-shadow(0 5px 15px rgba(0,0,0,0.1)); }
+        .timer-bg { fill: none; stroke: rgba(44, 36, 27, 0.1); stroke-width: 20; }
+        .timer-progress {
+            fill: none; stroke: var(--ml-red); stroke-width: 20;
+            stroke-dasharray: 1005; /* 2 * PI * 160 */
+            stroke-dashoffset: 0;
+            transition: stroke-dashoffset 1s linear;
+            stroke-linecap: butt;
+        }
+
+        .timer-readout {
+            position: absolute;
+            display: flex; flex-direction: column; align-items: center;
+            z-index: 20;
+        }
+        .time-big {
+            font-family: 'Oswald', sans-serif; font-size: 90px; font-weight: 700;
+            color: var(--ml-border); line-height: 0.9;
+        }
+        .time-label {
+            font-family: 'Share Tech Mono'; color: var(--ml-red);
+            font-size: 16px; letter-spacing: 2px; margin-top: 5px;
+        }
+
+        /* --- 新：控制台按钮组 (Control Deck) --- */
+        .control-deck {
+            display: flex; gap: 15px;
+            background: #d1cbb8;
+            padding: 15px 25px;
+            border: 3px solid var(--ml-border);
+            box-shadow:
+                    inset 2px 2px 5px rgba(255,255,255,0.5),
+                    inset -2px -2px 5px rgba(0,0,0,0.1),
+                    5px 5px 10px rgba(0,0,0,0.1);
+            border-radius: 4px;
+        }
+
+        .deck-btn {
+            display: flex; flex-direction: column; align-items: center; gap: 5px;
+            cursor: pointer; position: relative;
+        }
+
+        .deck-btn-cap {
+            width: 80px; height: 60px;
+            background: #e6e1d5;
+            border: 2px solid #5e5045;
+            border-bottom-width: 6px; /* 3D look */
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'Oswald'; font-weight: 700; color: #3d2e26;
+            transition: all 0.1s;
+            box-shadow: 0 5px 5px rgba(0,0,0,0.1);
+        }
+
+        .deck-btn:active .deck-btn-cap {
+            transform: translateY(4px);
+            border-bottom-width: 2px;
+            box-shadow: none;
+            background: #d1cbb8;
+        }
+
+        /* 不同的按钮风格 */
+        .btn-exec .deck-btn-cap {
+            background: var(--ml-red); color: #fff; border-color: var(--ml-red-dim);
+            width: 120px; font-size: 18px; letter-spacing: 1px;
+        }
+        .btn-exec:active .deck-btn-cap { background: var(--ml-red-dim); }
+
+        .btn-reset .deck-btn-cap { background: #5e5045; color: #fff; border-color: #2c241b; }
+
+        .btn-label {
+            font-family: 'Share Tech Mono'; font-size: 10px; color: #3d2e26; font-weight: bold; letter-spacing: 1px;
+        }
+
+        .led-indicator {
+            width: 10px; height: 4px; background: #555; margin-bottom: 4px;
+            border-radius: 2px; transition: background 0.2s;
+        }
+        .running .led-exec { background: #00ff00; box-shadow: 0 0 5px #00ff00; }
+        .paused .led-pause { background: #ffcc00; box-shadow: 0 0 5px #ffcc00; }
+
+        /* 示波器画布 */
+        #visualizer-canvas {
+            position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+            width: 300px; height: 60px;
+            opacity: 0.7; pointer-events: none;
+            border-bottom: 1px solid rgba(139,0,0,0.2);
+        }
+
+        /* --- 底部：电报机 --- */
+        .teletype-deck {
+            height: 100px;
+            background: var(--ml-black);
+            border-top: 4px solid var(--ml-gold);
+            padding: 15px 20px;
+            display: flex; flex-direction: column;
+            justify-content: center;
+            overflow: hidden;
+        }
+        .teletype-header {
+            font-family: 'Share Tech Mono'; color: var(--ml-gold); font-size: 12px;
+            margin-bottom: 8px; display: flex; justify-content: space-between;
+        }
+        .teletype-content {
+            font-family: 'Noto Serif SC', serif; font-size: 16px; color: #e6e1d5;
+            white-space: nowrap; border-right: 2px solid var(--ml-gold);
+            height: 24px;
+        }
+
+        /* 动画 */
+        @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+    </style>
+</head>
+<body>
+
+<div class="guilloche-bg"></div>
+<div class="crt-overlay"></div>
+
+<div class="terminal-frame">
+    <!-- 1. 状态栏 -->
+    <div class="status-bar">
+        <div class="status-item">
+            <i data-lucide="cpu" size="16"></i>
+            <span>REPUBLIC PRODUCTIVITY TERMINAL v3.0</span>
+        </div>
+        <div class="status-item blink" id="connection-status" style="color: var(--ml-green);">
+            ● SYSTEM READY
+        </div>
+        <div class="status-item" id="clock-display">
+            00:00:00
+        </div>
+    </div>
+
+    <div class="main-deck">
+        <!-- 2. 左侧控制台 -->
+        <div class="control-column">
+
+            <!-- 配额设定 -->
+            <div class="panel-block">
+                <div class="panel-title">QUOTA SETTING (配额)</div>
+                <div class="time-adjuster">
+                    <div class="adjust-btn-row">
+                        <button class="adjust-btn" onclick="adjustTime(-5)">-</button>
+                        <div style="font-family:'Oswald'; font-size:24px; font-weight:bold; width:60px; text-align:center;" id="setup-display">25</div>
+                        <button class="adjust-btn" onclick="adjustTime(5)">+</button>
+                    </div>
+                    <button class="preset-btn" onclick="setPreset(25)">
+                        <span>标准冲刺</span> <span>25 MIN</span>
+                    </button>
+                    <button class="preset-btn" onclick="setPreset(50)">
+                        <span>深度攻坚</span> <span>50 MIN</span>
+                    </button>
+                    <button class="preset-btn" onclick="setPreset(5)">
+                        <span>设备维护</span> <span>05 MIN</span>
+                    </button>
+                </div>
+            </div>
+
+            <!-- 音频控制 -->
+            <div class="panel-block">
+                <div class="panel-title">AUDIO (环境声)</div>
+                <div class="audio-channels">
+                    <div style="font-size:10px; color:#666; font-weight:bold;">-- LOCAL GENERATOR (本地生成) --</div>
+                    <div class="channel-btn" onclick="playEngine('brown')" id="ch-brown">
+                        <span>CH-0 机械轰鸣</span> <div class="channel-status"></div>
+                    </div>
+                    <div class="channel-btn" onclick="playEngine('pink')" id="ch-pink">
+                        <span>CH-1 信号流</span> <div class="channel-status"></div>
+                    </div>
+                    <div class="channel-btn" onclick="playEngine('rain')" id="ch-rain">
+                        <span>CH-4 绵绵雨声</span> <div class="channel-status"></div>
+                    </div>
+                    <div class="channel-btn" onclick="playEngine('typing')" id="ch-typing">
+                        <span>CH-5 机械打字</span> <div class="channel-status"></div>
+                    </div>
+
+                    <div style="font-size:10px; color:#666; font-weight:bold; margin-top:5px;">-- NETWORK RADIO (网络电台) --</div>
+                    <div class="channel-btn" onclick="playNetRadio('soviet')" id="ch-soviet">
+                        <span>CH-2 苏维埃波</span> <div class="channel-status"></div>
+                    </div>
+                    <div class="channel-btn" onclick="playNetRadio('classical')" id="ch-classical">
+                        <span>CH-3 严肃古典</span> <div class="channel-status"></div>
+                    </div>
+                </div>
+                <div style="margin-top:15px; font-size:10px; font-weight:bold; color:#555;">GAIN (增益)</div>
+                <input type="range" id="volume-slider" min="0" max="1" step="0.05" value="0.2">
+            </div>
+
+        </div>
+
+        <!-- 3. 中间显示器 -->
+        <div class="monitor-column" id="monitor-area">
+            <div class="timer-container">
+                <svg class="timer-svg" viewBox="0 0 360 360">
+                    <circle class="timer-bg" cx="180" cy="180" r="160"></circle>
+                    <circle class="timer-progress" id="progress-ring" cx="180" cy="180" r="160"></circle>
+                </svg>
+                <div class="timer-readout">
+                    <div class="time-big" id="timer-main">25:00</div>
+                    <div class="time-label" id="mode-label">READY</div>
+                </div>
+            </div>
+
+            <!-- 新：工业按钮组 -->
+            <div class="control-deck">
+                <div class="deck-btn btn-reset" onclick="resetTimer()">
+                    <div class="led-indicator"></div>
+                    <div class="deck-btn-cap"><i data-lucide="rotate-ccw"></i></div>
+                    <div class="btn-label">RESET</div>
+                </div>
+
+                <div class="deck-btn btn-exec" onclick="toggleTimer()" id="btn-exec-wrapper">
+                    <div class="led-indicator led-exec"></div>
+                    <div class="deck-btn-cap" id="exec-btn-text">EXECUTE</div>
+                    <div class="btn-label">RUN/PAUSE</div>
+                </div>
+
+                <div class="deck-btn" onclick="stopAudio()">
+                    <div class="led-indicator"></div>
+                    <div class="deck-btn-cap"><i data-lucide="volume-x"></i></div>
+                    <div class="btn-label">MUTE</div>
+                </div>
+            </div>
+
+            <!-- 示波器 -->
+            <canvas id="visualizer-canvas" width="300" height="60"></canvas>
+        </div>
+    </div>
+
+    <!-- 4. 底部电报机 -->
+    <div class="teletype-deck">
+        <div class="teletype-header">
+            <span>> TELETYPE FEED (知识流)</span>
+            <span id="db-counter">INDEX: 001/136</span>
+        </div>
+        <div class="teletype-content" id="typewriter">等待指令...</div>
+    </div>
+</div>
+
+<audio id="net-player" loop crossorigin="anonymous"></audio>
+
+<script>
+    // --- 全局数据 ---
+    const knowledgeDB = [
+        "核心命题：资本主义必然灭亡，社会主义必然胜利。",
+        "理解政经枢纽：劳动二重性理论。",
+        "六个寓于：价值>使用价值，必然>偶然，斗争>同一，绝对>相对，普遍>特殊，共性>个性。",
+        "金融资本途径：金融联系、资本参与、人事参与。",
+        "三大法宝：统一战线、武装斗争、党的建设。",
+        "活的灵魂：实事求是、群众路线、独立自主。",
+        "法律至上：普遍适用性、优先适用性、不可违抗性。",
+        "爱国主义特征：现实的、历史的、具体的。",
+        "核心价值观：富强民主文明和谐，自由平等公正法治，爱国敬业诚信友善。",
+        "四个全面：全面建设社会主义现代化国家、全面深化改革、全面依法治国、全面从严治党。"
+    ];
+
+    // --- 状态 ---
+    let currentMinutes = 25;
+    let timeLeft = 25 * 60;
+    let timerId = null;
+    let isRunning = false;
+
+    // --- 音频引擎 ---
+    const ProcAudio = {
+        ctx: null,
+        nodes: [],
+        intervals: [],
+        activeType: null,
+        gainNode: null,
+        analyser: null,
+
+        init() {
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            this.ctx = new AudioContext();
+            this.gainNode = this.ctx.createGain();
+            this.analyser = this.ctx.createAnalyser();
+            this.analyser.fftSize = 256;
+
+            this.gainNode.connect(this.analyser);
+            this.analyser.connect(this.ctx.destination);
+
+            // 初始音量
+            const vol = document.getElementById('volume-slider').value;
+            this.gainNode.gain.value = vol;
+        },
+
+        stop() {
+            // 停止所有振荡器/节点
+            this.nodes.forEach(n => {
+                try{n.stop()}catch(e){}
+                try{n.disconnect()}catch(e){}
+            });
+            this.nodes = [];
+
+            // 停止所有定时器
+            this.intervals.forEach(i => clearInterval(i));
+            this.intervals = [];
+
+            if(this.ctx && this.ctx.state === 'running') {
+                // 保持 context running，只断开连接
+            }
+            this.activeType = null;
+
+            // UI 更新
+            document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('connection-status').innerText = "● SYSTEM READY";
+            document.getElementById('connection-status').style.color = "var(--ml-green)";
+        },
+
+        setVolume(val) {
+            if(this.gainNode) this.gainNode.gain.value = val;
+        },
+
+        play(type) {
+            if(!this.ctx) this.init();
+            if(this.ctx.state === 'suspended') this.ctx.resume();
+
+            this.stop(); // 先停止当前
+            this.activeType = type;
+
+            // UI 更新
+            document.getElementById('ch-' + type).classList.add('active');
+            document.getElementById('connection-status').innerText = "● GENERATING: " + type.toUpperCase();
+            document.getElementById('connection-status').style.color = "var(--ml-gold)";
+
+            if(type === 'brown') this.synthNoise('brown');
+            else if(type === 'pink') this.synthNoise('pink');
+            else if(type === 'rain') this.synthRain();
+            else if(type === 'typing') this.synthTyping();
+        },
+
+        // 合成基础噪音
+        synthNoise(color) {
+            const bufferSize = this.ctx.sampleRate * 2;
+            const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+
+            let lastOut = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                if(color === 'brown') {
+                    data[i] = (lastOut + (0.02 * white)) / 1.02;
+                    lastOut = data[i];
+                    data[i] *= 3.5;
+                } else { // pink approx
+                    data[i] = (lastOut + (0.02 * white)) / 1.02;
+                    lastOut = data[i];
+                }
+            }
+
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = buffer;
+            noise.loop = true;
+            noise.connect(this.gainNode);
+            noise.start();
+            this.nodes.push(noise);
+        },
+
+        // 合成雨声 (粉红噪音 + 低通滤波)
+        synthRain() {
+            // 1. 创建更长的噪音 buffer 避免重复感
+            const bufferSize = this.ctx.sampleRate * 5;
+            const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+            const data = buffer.getChannelData(0);
+            let lastOut = 0;
+            for (let i = 0; i < bufferSize; i++) {
+                const white = Math.random() * 2 - 1;
+                data[i] = (lastOut + (0.02 * white)) / 1.02;
+                lastOut = data[i];
+                data[i] *= 1.5; // 稍微大一点增益
+            }
+
+            const noise = this.ctx.createBufferSource();
+            noise.buffer = buffer;
+            noise.loop = true;
+
+            // 2. 低通滤波器 (模拟窗外沉闷感)
+            const filter = this.ctx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 800; // 截止频率
+
+            noise.connect(filter);
+            filter.connect(this.gainNode);
+            noise.start();
+
+            this.nodes.push(noise);
+            this.nodes.push(filter);
+        },
+
+        // 合成打字机 (随机触发)
+        synthTyping() {
+            // 创建一个循环定时器，随机触发按键声
+            const triggerKey = () => {
+                if(this.activeType !== 'typing') return;
+
+                const t = this.ctx.currentTime;
+
+                // 1. 击键声 (短促噪音)
+                const osc = this.ctx.createOscillator();
+                const gain = this.ctx.createGain();
+
+                // 使用三角波模拟机械撞击的低频部分
+                osc.type = 'triangle';
+                osc.frequency.setValueAtTime(100 + Math.random()*50, t);
+
+                gain.gain.setValueAtTime(0.5, t);
+                gain.gain.exponentialRampToValueAtTime(0.01, t + 0.05);
+
+                osc.connect(gain);
+                gain.connect(this.gainNode);
+                osc.start(t);
+                osc.stop(t + 0.05);
+
+                // 2. 高频点击 (模拟触碰键帽)
+                const noiseBuffer = this.ctx.createBuffer(1, 441, this.ctx.sampleRate);
+                const noiseData = noiseBuffer.getChannelData(0);
+                for(let i=0; i<441; i++) noiseData[i] = Math.random() * 2 - 1;
+
+                const click = this.ctx.createBufferSource();
+                click.buffer = noiseBuffer;
+                const clickGain = this.ctx.createGain();
+                clickGain.gain.value = 0.3;
+
+                // 高通滤波让点击更清脆
+                const filter = this.ctx.createBiquadFilter();
+                filter.type = 'highpass';
+                filter.frequency.value = 2000;
+
+                click.connect(filter);
+                filter.connect(clickGain);
+                clickGain.connect(this.gainNode);
+                click.start(t);
+
+                // 3. 偶尔触发“换行铃声” (约 5% 概率)
+                if(Math.random() < 0.05) {
+                    const bell = this.ctx.createOscillator();
+                    bell.type = 'sine';
+                    bell.frequency.setValueAtTime(1500, t + 0.1);
+                    const bellGain = this.ctx.createGain();
+                    bellGain.gain.setValueAtTime(0.1, t + 0.1);
+                    bellGain.gain.exponentialRampToValueAtTime(0.001, t + 1.5);
+                    bell.connect(bellGain);
+                    bellGain.connect(this.gainNode);
+                    bell.start(t + 0.1);
+                    bell.stop(t + 1.5);
+                }
+
+                // 下一次触发时间 (模拟打字节奏: 快一阵慢一阵)
+                let nextDelay = 100 + Math.random() * 300;
+                if(Math.random() < 0.1) nextDelay += 500; // 思考停顿
+
+                const timeout = setTimeout(triggerKey, nextDelay);
+                // 既然用了 setTimeout，我们需要一种方法在 stop() 时清除它
+                // 这里简单处理：在外部 interval 数组中存一个引用其实不太好存 timeout
+                // 变通：我们在 triggerKey 开头检查 activeType，如果不匹配直接返回，相当于停止循环
+            };
+
+            triggerKey();
+        }
+    };
+
+    // --- 主逻辑 ---
+
+    document.addEventListener('DOMContentLoaded', () => {
+        lucide.createIcons();
+        setInterval(updateClock, 1000);
+        startTypewriter();
+        initAudioVisualizer();
+
+        // 绑定音量
+        document.getElementById('volume-slider').addEventListener('input', (e) => {
+            const vol = parseFloat(e.target.value);
+            ProcAudio.setVolume(vol);
+            document.getElementById('net-player').volume = vol;
+        });
+    });
+
+    function updateClock() {
+        const now = new Date();
+        document.getElementById('clock-display').innerText = now.toLocaleTimeString('en-GB');
+    }
+
+    // --- 计时器 ---
+    function adjustTime(delta) {
+        if(isRunning) return;
+        currentMinutes += delta;
+        if(currentMinutes < 5) currentMinutes = 5;
+        if(currentMinutes > 120) currentMinutes = 120;
+        resetTimerTo(currentMinutes);
+    }
+
+    function setPreset(min) {
+        if(isRunning && !confirm("确认终止当前任务并重置？")) return;
+        if(isRunning) toggleTimer();
+        currentMinutes = min;
+        resetTimerTo(min);
+    }
+
+    function resetTimerTo(min) {
+        timeLeft = min * 60;
+        document.getElementById('setup-display').innerText = min;
+        updateTimerUI();
+        document.getElementById('mode-label').innerText = "READY";
+        document.getElementById('mode-label').style.color = "var(--ml-red)";
+    }
+
+    function resetTimer() {
+        if(isRunning) toggleTimer();
+        resetTimerTo(currentMinutes);
+    }
+
+    function updateTimerUI() {
+        const m = Math.floor(timeLeft / 60).toString().padStart(2,'0');
+        const s = (timeLeft % 60).toString().padStart(2,'0');
+        document.getElementById('timer-main').innerText = `${m}:${s}`;
+
+        const totalTime = currentMinutes * 60;
+        const circle = document.getElementById('progress-ring');
+        const circumference = 1005;
+        const offset = circumference - (timeLeft / totalTime) * circumference;
+        circle.style.strokeDashoffset = offset;
+    }
+
+    function toggleTimer() {
+        const btnWrapper = document.getElementById('monitor-area');
+
+        if(isRunning) {
+            clearInterval(timerId);
+            isRunning = false;
+            document.getElementById('mode-label').innerText = "PAUSED";
+            document.getElementById('exec-btn-text').innerText = "RESUME";
+            btnWrapper.classList.add('paused');
+            btnWrapper.classList.remove('running');
+        } else {
+            // 启动计时
+            timerId = setInterval(() => {
+                if(timeLeft > 0) {
+                    timeLeft--;
+                    updateTimerUI();
+                } else {
+                    completeTimer();
+                }
+            }, 1000);
+            isRunning = true;
+            document.getElementById('mode-label').innerText = "EXECUTING";
+            document.getElementById('exec-btn-text').innerText = "PAUSE";
+            btnWrapper.classList.add('running');
+            btnWrapper.classList.remove('paused');
+
+            // 自动播放当前选中的声音 (如果没声音在放，且没手动静音过，可以默认一个，这里暂不强制)
+        }
+        lucide.createIcons();
+    }
+
+    function completeTimer() {
+        clearInterval(timerId);
+        isRunning = false;
+        document.getElementById('mode-label').innerText = "COMPLETED";
+        document.getElementById('monitor-area').classList.remove('running');
+        stopAudio();
+        const beep = new Audio('https://actions.google.com/sounds/v1/alarms/beep_short.ogg');
+        beep.play();
+        alert("配额完成！");
+    }
+
+    // --- 音频控制封装 ---
+    function playEngine(type) {
+        if(!isRunning) toggleTimer();
+
+        // 停止网络播放器
+        document.getElementById('net-player').pause();
+
+        ProcAudio.play(type);
+    }
+
+    function playNetRadio(channel) {
+        if(!isRunning) toggleTimer();
+        ProcAudio.stop(); // 停止本地生成
+
+        const netPlayer = document.getElementById('net-player');
+        const urls = {
+            'soviet': 'https://ia800303.us.archive.org/32/items/SovietSynthpop/Soviet%20Synthpop%20-%20Alliance%20-%20Na%20Zare.mp3',
+            'classical': 'https://ia800705.us.archive.org/17/items/TchaikovskySymphonyNo.5InEMinorOp.64/02.TchaikovskySymphonyNo.5InEMinorOp.64-Ii.AndanteCantabileConAlcunaLicenza.mp3'
+        };
+
+        // UI
+        document.querySelectorAll('.channel-btn').forEach(b => b.classList.remove('active'));
+        document.getElementById('ch-' + channel).classList.add('active');
+        document.getElementById('connection-status').innerText = "○ NET BUFFERING...";
+
+        netPlayer.src = urls[channel];
+        netPlayer.volume = document.getElementById('volume-slider').value;
+
+        // 尝试连接分析器到网络音频 (跨域限制可能导致无波形，但能播放)
+        try {
+            if(!ProcAudio.ctx) ProcAudio.init();
+            // 注意：createMediaElementSource 只能连一次，这里简化处理，可能报错
+            // 实际项目中需管理 source 节点状态
+        } catch(e) {}
+
+        netPlayer.play().then(() => {
+            document.getElementById('connection-status').innerText = "● NET SIGNAL LOCKED";
+            document.getElementById('connection-status').style.color = "var(--ml-green)";
+        }).catch(e => {
+            alert("网络连接失败，已切换至本地雨声。");
+            playEngine('rain');
+        });
+    }
+
+    function stopAudio() {
+        ProcAudio.stop();
+        document.getElementById('net-player').pause();
+    }
+
+    // --- 示波器 ---
+    function initAudioVisualizer() {
+        const canvas = document.getElementById('visualizer-canvas');
+        const ctx = canvas.getContext('2d');
+
+        function draw() {
+            requestAnimationFrame(draw);
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            if(!ProcAudio.analyser) return;
+
+            const bufferLength = ProcAudio.analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            ProcAudio.analyser.getByteTimeDomainData(dataArray);
+
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#8b0000';
+            ctx.beginPath();
+
+            const sliceWidth = canvas.width * 1.0 / bufferLength;
+            let x = 0;
+
+            for(let i = 0; i < bufferLength; i++) {
+                const v = dataArray[i] / 128.0;
+                const y = v * canvas.height / 2;
+                if(i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+                x += sliceWidth;
+            }
+            ctx.lineTo(canvas.width, canvas.height / 2);
+            ctx.stroke();
+        }
+        draw();
+    }
+
+    // --- 打字机复习 ---
+    function startTypewriter() {
+        const el = document.getElementById('typewriter');
+        let textIdx = 0;
+        let charIdx = 0;
+        let isDeleting = false;
+        let currentTxt = '';
+
+        function type() {
+            const fullTxt = knowledgeDB[textIdx];
+            if(isDeleting) {
+                currentTxt = fullTxt.substring(0, charIdx - 1);
+                charIdx--;
+            } else {
+                currentTxt = fullTxt.substring(0, charIdx + 1);
+                charIdx++;
+            }
+            el.innerText = currentTxt + "█";
+
+            let delta = 100 - Math.random() * 50;
+            if(isDeleting) delta /= 3;
+
+            if(!isDeleting && charIdx === fullTxt.length) {
+                delta = 5000;
+                isDeleting = true;
+            } else if(isDeleting && charIdx === 0) {
+                isDeleting = false;
+                textIdx = (textIdx + 1) % knowledgeDB.length;
+                delta = 500;
+                document.getElementById('db-counter').innerText = `INDEX: ${(textIdx+1).toString().padStart(3,'0')}/136`;
+            }
+            setTimeout(type, delta);
+        }
+        type();
+    }
+
+</script>
+</body>
+</html>
